@@ -1,0 +1,29 @@
+Summary	(2025-05-26 12:30:01)
+
+-------------------------------------------------------------------------------
+ The files below have ligands
+examples/1hut.pdb	ligands: 0G7   HOH   
+
+-------------------------------------------------------------------------------
+ The files below have alternate locations
+
+-------------------------------------------------------------------------------
+ The files below have non-standard residues
+
+-------------------------------------------------------------------------------
+ The files below have hydrogen atoms
+
+-------------------------------------------------------------------------------
+ The files below have sequence gaps
+examples/1hut.pdb	sequence gaps:('H:148', 'H:150')('H:217', 'H:219')
+
+-------------------------------------------------------------------------------
+ The files below have insertion code
+examples/1hut.pdb	insertion code:A   B   C   D   E   F   G   H   I   
+
+-------------------------------------------------------------------------------
+ The files below have multiple chains
+1hut.pdb	multiple chains: D   L   H   
+
+-------------------------------------------------------------------------------
+ The files below have negative sequence number

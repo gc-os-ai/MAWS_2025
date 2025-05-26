@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: maws
+Version: 0.1.0
+Summary: Modernised MAWS utilities
+Requires-Python: >=3.9
