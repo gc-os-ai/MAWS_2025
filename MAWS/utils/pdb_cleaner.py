@@ -147,7 +147,7 @@ def pdb_structure(string):
            string[54:60].strip(),    # 11. standard deviation of occupancy
            string[60:66].strip(),    # 12. standard deviation of temperature
            string[76:78].strip(),    # 13. element symbol
-           string[98:80].strip()]    # 14. charge on the atom
+           string[78:80].strip()]    # 14. charge on the atom
     return pdb
 
 
@@ -183,7 +183,7 @@ def check_altloc(filename, pdb_df):
 #     if nonstdRes.any():
 #         return (filename, nonstdRes)
 
-
+## Modified by @siddharth7113
 def non_std_residues(filename, pdb_df):
     """This function checks for non-standard amino acid residues."""
     # 1. pull out the ResName column and uppercase everything
