@@ -299,9 +299,15 @@ class Complex:
         if self.positions is None:
             raise RuntimeError("Call .build() first")
 
-        pos       = self.positions
-        start_idx = 1 if reverse else 0
-        pivot     = pos[element[2] if reverse else element[start_idx]]
+        pos   = self.positions
+
+        # rotation always happens around the "bond" atom (element[1])
+        pivot = pos[element[1]]
+
+        if reverse:
+            start_idx, end_idx = element[0], element[1]
+        else:
+            start_idx, end_idx = element[1], element[2]
 
         axis_np   = from_angstrom(axis)
         axis_np  /= np.linalg.norm(axis_np)
@@ -314,7 +320,7 @@ class Complex:
             [2*x*z*s*s-2*y*c*s,2*z*y*s*s+2*x*c*s, 2*(z*z-1)*s*s+1 ],
         ])
 
-        for i in range(element[start_idx], element[2]):
+        for i in range(start_idx, end_idx):
             vec_np = from_angstrom(pos[i] - pivot)
             pos[i] = unit.Quantity(np.dot(vec_np, rot), unit.angstrom) + pivot
 

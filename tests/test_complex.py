@@ -51,3 +51,22 @@ def test_build_mocked(
     mock_prm.assert_called_once()
     mock_inp.assert_called_once()
     mock_sim.assert_called_once()      # Simulation ctor patched
+
+
+def test_rotate_global_pivot(dummy_structure):
+    import numpy as np
+    from openmm import unit
+
+    cplx = Complex()
+    cplx.positions = [
+        unit.Quantity(np.array([0.0, 0.0, 0.0]), unit.angstrom),
+        unit.Quantity(np.array([1.0, 0.0, 0.0]), unit.angstrom),
+        unit.Quantity(np.array([2.0, 0.0, 0.0]), unit.angstrom),
+    ]
+
+    # rotate atoms 1..2 around z-axis passing through atom 1
+    cplx.rotate_global([0, 1, 3], unit.Quantity(np.array([0.0, 0.0, 1.0]), unit.angstrom), np.pi / 2)
+
+    assert np.allclose(cplx.positions[0].value_in_unit(unit.angstrom), [0.0, 0.0, 0.0])
+    assert np.allclose(cplx.positions[1].value_in_unit(unit.angstrom), [1.0, 0.0, 0.0])
+    assert not np.allclose(cplx.positions[2].value_in_unit(unit.angstrom), [2.0, 0.0, 0.0])
