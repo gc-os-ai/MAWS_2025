@@ -1,311 +1,279 @@
-#MAWS is part of the sharksome software suite
-#This software is published under MIT license
-#COPYRIGHT 2017 Michael Jendrusch
-#Authors: Michael Jendrusch, Stefan Holderbach
+#!/usr/bin/env python3
+# MAWS is part of the sharksome software suite
+# This software is published under MIT license
+# COPYRIGHT 2017 Michael Jendrusch
+# Authors: Michael Jendrusch, Stefan Holderbach
+#
+# Modifications by DTU Biobuilders (2023) and additional refactor (2025)
 
-#VERSION Information
-#Note: This information should be updated with every technical change to ensure that
-#      every calculation can be linked to its software version.
-
-# Modifications were made by DTU Biobuilders in 2023
-
-VERSION = "2.0"
+VERSION = "2.1"
 RELEASE_DATE = "2017"
 METHOD = "Kullback-Leibler"
 
-import copy
-import numpy as np
 import argparse
-from datetime import datetime
-from LoadFrom import XMLStructure
-from helpers import nostrom
-from Complex import Complex
-from Structure import Structure
-from Routines import ZPS, S
-from Kernels import centerOfMass
-from collections import defaultdict
-from operator import itemgetter
-from openmm import unit
-from openmm import app
-import Space
+import copy
 import os
+from datetime import datetime
 
-#Parser
-parser = argparse.ArgumentParser()
-parser.add_argument("-n", "--name", type=str, default="MAWS_aptamer", help="Job name.")
-parser.add_argument("-nt", "--ntides", type=int, default=15, help="Number of nucleotides in the aptamer.")
-parser.add_argument("-p", "--path", type=str, default="./pfoa.pdb", help="Path to your PDB file.")
-parser.add_argument("-ta", "--aptamertype", type=str, default="RNA", help="Type of aptamer, can be either DNA or RNA.")
-parser.add_argument("-tm", "--moleculetype", type=str, default="protein", help="Type of ligand molecule, can be either protein, organic or lipid.")
-parser.add_argument("-cenv", "--condaenv", type=str, default="maws_p3", help="Name of your conda environment that contains requirements.txt")
-parser.add_argument("-b", "--beta", type=float, default=0.01, help="Inverse temperature.")
-parser.add_argument("-c1", "--firstchunksize", type=int, default=5000, help="Number of samples in the first MAWS step.")
-parser.add_argument("-c2", "--secondchunksize", type=int, default=5000, help="Number of samples in all subsequent MAWS steps.")
-args = parser.parse_args()
+import numpy as np
+from openmm import app, unit
 
-#PARAMS
-JOB_NAME = args.name
-BETA = args.beta
-FIRST_CHUNK_SIZE = args.firstchunksize
-SECOND_CHUNK_SIZE = args.secondchunksize
-N_NTIDES = args.ntides
-PDB_PATH = args.path
-ATPAMER_TYPE = args.aptamertype
-MOLECULE_TYPE = args.moleculetype
-CONDA_ENV = args.condaenv
-N_ELEMENTS = 4 # Number of rotable junctions in RNA/DNA, to distinguish forward and backward rotation
+import Space
+from Complex import Complex
+from Kernels import centerOfMass
+from LoadFrom import XMLStructure
+from Routines import S
+from helpers import nostrom
 
-#Open a pdb file, to monitor progress
-output = open("{0}_output.log".format(JOB_NAME),"w")
-entropyLog = open("{0}_entropy.log".format(JOB_NAME), "w")
-step = open("{0}_step_cache.pdb".format(JOB_NAME), "w")
 
-#Starting logfile
-output.write("MAWS - Making Aptamers With Software\n")
-output.write("Active version: {0} (released:_{1})\n".format(VERSION, RELEASE_DATE))
-output.write("Computational method: {0}\n".format(METHOD))
-output.write("Type of aptamer: {0}\n".format(ATPAMER_TYPE))
-output.write("Type of ligand molecule: {0}\n".format(MOLECULE_TYPE))
-output.write("Job: {0}\n".format(JOB_NAME))
-output.write("Input file: {0}\n".format(PDB_PATH))
-output.write("Sample number in initial step: {0}\n".format(FIRST_CHUNK_SIZE))
-output.write("Sample number per further steps: {0}\n".format(SECOND_CHUNK_SIZE))
-output.write("Number of further steps: {0} (sequence length = {1})\n".format(N_NTIDES, N_NTIDES + 1))
-output.write("Value of beta: {0}\n".format(BETA))
-output.write("Start time: {0}\n".format(str(datetime.now())))
+def parse_args():
+    parser = argparse.ArgumentParser(description="MAWS - Making Aptamers With Software")
+    parser.add_argument("-n", "--name", type=str, default="MAWS_aptamer", help="Job name.")
+    parser.add_argument("-nt", "--ntides", type=int, default=15, help="Number of nucleotides in the aptamer.")
+    parser.add_argument("-p", "--path", type=str, default="./pfoa.pdb", help="Path to your ligand PDB file.")
+    parser.add_argument("-ta", "--aptamertype", type=str, default="RNA", choices=["RNA", "DNA"],
+                        help="Type of aptamer (DNA or RNA).")
+    parser.add_argument("-tm", "--moleculetype", type=str, default="protein",
+                        choices=["protein", "organic", "lipid"],
+                        help="Type of ligand molecule.")
+    parser.add_argument("-b", "--beta", type=float, default=0.01, help="Inverse temperature.")
+    parser.add_argument("-c1", "--firstchunksize", type=int, default=5000,
+                        help="Number of samples in the first MAWS step.")
+    parser.add_argument("-c2", "--secondchunksize", type=int, default=5000,
+                        help="Number of samples in all subsequent MAWS steps.")
+    return parser.parse_args()
 
-#Choose suitable force field file for aptamer
-script_path = os.path.dirname(os.path.abspath(__file__))
-if ATPAMER_TYPE == "RNA":
-	xml_molecule = XMLStructure(os.path.join(script_path, "RNA.xml")) #Build Structure-object for RNA residues
-	nt_list = "GAUC"
-	force_field_aptamer = "leaprc.RNA.OL3"
-elif ATPAMER_TYPE == "DNA":
-	xml_molecule = XMLStructure(os.path.join(script_path, "DNA.xml")) #Build Structure-object for DNA residues
-	nt_list = "GATC"
-	force_field_aptamer = "leaprc.DNA.OL21"
-else: # Error handling
-	print("The type of aptamer was not properly set. It can only be DNA or RNA. Stopping the program.") #Option is not well defined, break program
-	exit()
-output.write("Force field selected for the aptamer: {0}\n".format(force_field_aptamer))
 
-#Choose suitable force field file for ligand
-if MOLECULE_TYPE == "protein":
-	force_field_ligand = "leaprc.protein.ff19SB"
-elif MOLECULE_TYPE == "organic":
-	force_field_ligand = "leaprc.gaff2"
-elif MOLECULE_TYPE == "lipid":
-	force_field_ligand = "leaprc.lipid21"
-else: # Error handling
-	print("The type of molecule was not properly set. It can only be protein, organic or lipid. Stopping the program.") #Option is not well defined, break program
-	exit()
-output.write("Force field selected for the ligand molecule: {0}\n".format(force_field_ligand))
+def main():
+    args = parse_args()
 
-#Instantiate the Complex for further computation
-cpx = Complex(force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand, conda_env=CONDA_ENV)
+    # Params
+    JOB_NAME = args.name
+    BETA = args.beta
+    FIRST_CHUNK_SIZE = args.firstchunksize
+    SECOND_CHUNK_SIZE = args.secondchunksize
+    N_NTIDES = args.ntides
+    PDB_PATH = args.path
+    APTAMER_TYPE = args.aptamertype
+    MOLECULE_TYPE = args.moleculetype
+    N_ELEMENTS = 4  # number of rotable junctions in RNA/DNA, to distinguish forward/backward rotation
 
-#Add an empty Chain to the Complex, of structure RNA or DNA
-cpx.add_chain('', xml_molecule)
+    # Logs
+    with open(f"{JOB_NAME}_output.log", "w") as output, \
+         open(f"{JOB_NAME}_entropy.log", "w") as entropy_log, \
+         open(f"{JOB_NAME}_step_cache.pdb", "w") as step:
 
-#Add a chain to the complex using a pdb file (e.g. "pfoa.pdb")
-cpx.add_chain_from_PDB(pdb_path=PDB_PATH, force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand,parameterized=False)
+        # Header
+        output.write("MAWS - Making Aptamers With Software\n")
+        output.write(f"Active version: {VERSION} (released:_{RELEASE_DATE})\n")
+        output.write(f"Computational method: {METHOD}\n")
+        output.write(f"Type of aptamer: {APTAMER_TYPE}\n")
+        output.write(f"Type of ligand molecule: {MOLECULE_TYPE}\n")
+        output.write(f"Job: {JOB_NAME}\n")
+        output.write(f"Input file: {PDB_PATH}\n")
+        output.write(f"Sample number in initial step: {FIRST_CHUNK_SIZE}\n")
+        output.write(f"Sample number per further steps: {SECOND_CHUNK_SIZE}\n")
+        output.write(f"Number of further steps: {N_NTIDES} (sequence length = {N_NTIDES + 1})\n")
+        output.write(f"Value of beta: {BETA}\n")
+        output.write(f"Start time: {datetime.now()}\n")
 
-#Build a complex with the pdb only, to get center of mass of the pdb --#
-c = Complex(force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand, conda_env=CONDA_ENV)
+        # Choose aptamer FF and residue XML
+        script_path = os.path.dirname(os.path.abspath(__file__))
+        if APTAMER_TYPE == "RNA":
+            xml_molecule = XMLStructure(os.path.join(script_path, "RNA.xml"))
+            nt_list = "GAUC"
+            force_field_aptamer = "leaprc.RNA.OL3"
+        else:  # DNA
+            xml_molecule = XMLStructure(os.path.join(script_path, "DNA.xml"))
+            nt_list = "GATC"
+            force_field_aptamer = "leaprc.DNA.OL21"
+        output.write(f"Force field selected for the aptamer: {force_field_aptamer}\n")
 
-c.add_chain_from_PDB(pdb_path=PDB_PATH, force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand,parameterized=False)
+        # Choose ligand FF
+        if MOLECULE_TYPE == "protein":
+            force_field_ligand = "leaprc.protein.ff19SB"
+        elif MOLECULE_TYPE == "organic":
+            force_field_ligand = "leaprc.gaff2"
+        else:
+            force_field_ligand = "leaprc.lipid21"
+        output.write(f"Force field selected for the ligand molecule: {force_field_ligand}\n")
 
-c.build()
-#----------------------------------------------------------------------#
+        # Complex template with an empty aptamer chain + the ligand from PDB
+        cpx = Complex(force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand)
+        cpx.add_chain('', xml_molecule)  # empty aptamer chain (sequence added later)
+        cpx.add_chain_from_PDB(pdb_path=PDB_PATH,
+                               force_field_aptamer=force_field_aptamer,
+                               force_field_ligand=force_field_ligand,
+                               parameterized=False)
 
-#Create a sampling Cube of Diameter 50. Angstroms around the pdb center of mass
-cube = Space.Cube(20., centerOfMass(np.asarray(nostrom(c.positions))))
+        # Build a separate complex with just the ligand to compute COM for sampling
+        c = Complex(force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand)
+        c.add_chain_from_PDB(pdb_path=PDB_PATH,
+                             force_field_aptamer=force_field_aptamer,
+                             force_field_ligand=force_field_ligand,
+                             parameterized=False)
+        c.build()
 
-#Create a sampling Space of the direct sum of N_ELEMENTS angles
-rotations = Space.NAngles(N_ELEMENTS)
+        # Sampling spaces
+        # Create a sampling Cube of width 20 Å around the ligand center of mass
+        cube = Space.Cube(20.0, centerOfMass(np.asarray(nostrom(c.positions))))
+        rotations = Space.NAngles(N_ELEMENTS)
 
-#Initialize variables for picking out the best aptamer
-best_entropy = None
-best_sequence = None
-best_positions = None
+        # Tracking best candidate
+        best_entropy = None
+        best_sequence = None
+        best_positions = None
+        best_ntide = None
+        best_topology = None
 
-output.write("Initialized succesfully!\n")
+        output.write("Initialized successfully!\n")
 
-#for each nucleotide
-for ntide in nt_list:
-	output.write("{0}: starting initial step for '{1}'\n".format(str(datetime.now()),ntide))
-	energies = []
-	free_E = None
-	position = None
-	#Get a full copy of our Complex
-	complex = copy.deepcopy(cpx)
-	#Pick a chain to be our aptamer
-	aptamer = complex.chains[0]
-	#Initialize the chain with a nucleotide
-	aptamer.create_sequence(ntide)
-	#Build the Complex
-	print("INTO LEAP ---------------------------------------------------------------------")
-	complex.build()
-	print("OUT OF LEAP -------------------------------------------------------------------")
-	#Remember its initial positions
-	positions0 = complex.positions[:]
-	#For the number of samples
-	for i in range(FIRST_CHUNK_SIZE):
-		#Get a new sample from the cube
-		orientation = cube.generator()
-		#Get a new sample from the angles
-		rotation = rotations.generator()
-		#Translate the aptamer by the displacement part of the sample from the cube generator
-		aptamer.translate_global(orientation[0:3]*unit.angstrom)
-		#Rotate the aptamer by the rotation part of the sample from the cube generator
-		aptamer.rotate_global(orientation[3:-1]*unit.angstrom, orientation[-1])
-		#For all thing rotating
-		for j in range(N_ELEMENTS):
-			#Rotate around the bond by generated angle
-			aptamer.rotate_in_residue(0, j, rotation[j])
-		#Get energy of the complex
-		energy = complex.get_energy()[0]
-		#Compare to lowest energy, if lowest...
-		if free_E == None or energy < free_E:
-			#Tell
-			print(energy)
-			#Set free energy to energy
-			free_E = energy
-			#Remember positions
-			position = complex.positions[:]
-		#Remember energy
-		energies.append(energy)
-		#Reset positions
-		complex.positions = positions0[:]
-	#Calculate entropy
-	entropy = S(energies, beta=BETA)
+        # ---- Step 1: choose the first nucleotide ----------------------------------
+        for ntide in nt_list:
+            output.write(f"{datetime.now()}: starting initial step for '{ntide}'\n")
+            energies = []
+            free_E = None
+            position = None
 
-	#Performing outputs
-	pdblog = open("{0}_1_{1}.pdb".format(JOB_NAME,ntide),"w")
-	app.PDBFile.writeModel(copy.deepcopy(complex.topology), position[:], file=pdblog, modelIndex=1)
-	pdblog.close()
+            # clone the template complex
+            cx = copy.deepcopy(cpx)
+            aptamer = cx.chains[0]
 
-	entropyLog.write("SEQUENCE: {0} ENTROPY: {1} ENERGY: {2}\n".format(aptamer.alias_sequence, entropy, free_E))
-	#Check if best ...
-	if best_entropy == None or entropy < best_entropy:
-		best_entropy = entropy
-		best_sequence = ntide
-		best_ntide = ntide
-		best_positions = position[:]
-		best_topology = copy.deepcopy(complex.topology)
+            # seed sequence and build (LEaP build will hit cache after first time)
+            aptamer.create_sequence(ntide)
+            cx.build()
 
-app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
-#Output best as well
-pdblog = open("{0}_best_1_{1}.pdb".format(JOB_NAME,best_ntide),"w")
-app.PDBFile.writeModel(best_topology, best_positions, file=pdblog, modelIndex=1)
-pdblog.close()
+            # remember initial positions
+            positions0 = cx.positions[:]
 
-output.write("{0}: Completed first step. Selected nucleotide: {1}\n".format(str(datetime.now()), best_sequence))
-output.write("{0}: Starting further steps to append {1} nucleotides\n".format(str(datetime.now()), N_NTIDES))
+            # sample orientations/rotations
+            for _ in range(FIRST_CHUNK_SIZE):
+                orientation = cube.generator()
+                rotation = rotations.generator()
 
-#For how many nucleotides we want
-for i in range(1, N_NTIDES):
-	#Same as above, more or less
-	best_old_sequence = best_sequence
-	best_old_positions = best_positions[:]
-	best_entropy = None
-	for ntide in nt_list:
-		#For append nucleotide or prepend nucleotide
-		for append in [True, False]:
-			energies = []
-			free_E = None
-			position = None
-			#Get our complex
-			complex = copy.deepcopy(cpx)
-			#Get our aptamer
-			aptamer = complex.chains[0]
-			aptamer.create_sequence(best_old_sequence)
-			print("INTO LEAP ------------------------------------------------------------------------------")
-			complex.build()
-			print("OUT OF LEAP ----------------------------------------------------------------------------")
-			#Readjust positions
-			complex.positions = best_old_positions[:]
-			if append:
-				#Append new nucleotide
-				aptamer.append_sequence(ntide)
-			else:
-				#Prepend new nucleotide
-				aptamer.prepend_sequence(ntide)
-			print("INTO LEAP ------------------------------------------------------------------------------")
-			complex.rebuild()
-			print("OUT OF LEAP ----------------------------------------------------------------------------")
-			## Optionally minimize or "shake" complex, to find lower energy local minimum
-			#not recommended! causes issues with proteins
-			#complex.minimize()
-			complex.pert_min(size=0.5)
-			#Remember positions
-			positions0 = complex.positions[:]
+                aptamer.translate_global(orientation[0:3] * unit.angstrom)
+                aptamer.rotate_global(orientation[3:-1] * unit.angstrom, orientation[-1])
 
-			#For number of samples
-			for k in range(SECOND_CHUNK_SIZE):
-				#Get random angles
-				rotation = rotations.generator()
-				#For everything forward
-				for j in range(N_ELEMENTS-1):
-					#Rotate the new nucleotide's bonds
-					if append:
-						aptamer.rotate_in_residue(-1, j, rotation[j])
-					else:
-						aptamer.rotate_in_residue(0, j, rotation[j], reverse=True)
-				#For everything backward (C3'-O3')
-				#Rotate the old nucleotides' bond
-				if append:
-					aptamer.rotate_in_residue(-2, 3, rotation[3])
-				else:
-					aptamer.rotate_in_residue(0, 3, rotation[3], reverse=True)
-				#Get energy
-				energy = complex.get_energy()[0]
-				#Check if best
-				if free_E == None or energy < free_E:
-					print(energy)
-					free_E = energy
-					position = complex.positions[:]
-				#Remember energies
-				energies.append(energy)
-				#Reset positions
-				complex.positions = positions0[:]
+                for j in range(N_ELEMENTS):
+                    aptamer.rotate_in_residue(0, j, rotation[j])
 
-			entropy = S(energies, beta=BETA)
+                energy = cx.get_energy()[0]
+                if free_E is None or energy < free_E:
+                    free_E = energy
+                    position = cx.positions[:]
+                energies.append(energy)
 
-			#outputs
-			pdblog = open("{0}_{1}_{2}.pdb".format(JOB_NAME, i+1, ntide), "w")
-			app.PDBFile.writeModel(copy.deepcopy(complex.topology), position[:], file=pdblog, modelIndex=1)
-			pdblog.close()
+                # reset for next sample
+                cx.positions = positions0[:]
 
-			entropyLog.write("SEQUENCE: {0} ENTROPY: {1} ENERGY: {2}\n".format(aptamer.alias_sequence, entropy, free_E))
-			#Choose best
-			if best_entropy == None or entropy < best_entropy:
-				best_entropy = entropy
-				best_positions = position[:]
-				best_ntide = ntide
-				best_sequence = aptamer.alias_sequence
-				best_topology = copy.deepcopy(complex.topology)
-	app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
-	#Output best as well
-	output.write("{0}: Completed step {1}. Selected sequence: {2}\n".format(str(datetime.now()), i+1, best_sequence))
-	pdblog = open("{0}_best_{1}_{2}.pdb".format(JOB_NAME, i+1, best_ntide),"w")
-	app.PDBFile.writeModel(best_topology, best_positions, file=pdblog, modelIndex=1)
-	pdblog.close()
+            entropy = S(energies, beta=BETA)
 
-#Render resulting aptamer to pdb
-result_complex = copy.deepcopy(cpx)
-aptamer = result_complex.chains[0]
-aptamer.create_sequence(best_sequence)
-result_complex.build()
-result_complex.positions = best_positions[:]
-pdb_result = open("{0}_RESULT.pdb".format(JOB_NAME),"w")
-app.PDBFile.writeModel(result_complex.topology, result_complex.positions, file=pdb_result)
-pdb_result.close()
+            # outputs
+            with open(f"{JOB_NAME}_1_{ntide}.pdb", "w") as pdblog:
+                app.PDBFile.writeModel(copy.deepcopy(cx.topology), position[:], file=pdblog, modelIndex=1)
 
-output.write("{0}: Run completed. Thank you for using MAWS!\n\n".format(str(datetime.now())))
-output.write("Final sequence: {0}\n".format(best_sequence))
+            entropy_log.write(f"SEQUENCE: {aptamer.alias_sequence} ENTROPY: {entropy} ENERGY: {free_E}\n")
 
-#Garbage collection
-step.close()
-entropyLog.close()
-output.close()
+            if best_entropy is None or entropy < best_entropy:
+                best_entropy = entropy
+                best_sequence = ntide
+                best_ntide = ntide
+                best_positions = position[:]
+                best_topology = copy.deepcopy(cx.topology)
+
+        # cache best-of-step to file
+        app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
+        with open(f"{JOB_NAME}_best_1_{best_ntide}.pdb", "w") as pdblog:
+            app.PDBFile.writeModel(best_topology, best_positions, file=pdblog, modelIndex=1)
+
+        output.write(f"{datetime.now()}: Completed first step. Selected nucleotide: {best_sequence}\n")
+        output.write(f"{datetime.now()}: Starting further steps to append {N_NTIDES} nucleotides\n")
+
+        # ---- Steps 2..N: grow sequence ------------------------------------------------
+        for i in range(1, N_NTIDES):
+            best_old_sequence = best_sequence
+            best_old_positions = best_positions[:]
+            best_entropy = None
+
+            for ntide in nt_list:
+                for append in [True, False]:
+                    energies = []
+                    free_E = None
+                    position = None
+
+                    cx = copy.deepcopy(cpx)
+                    aptamer = cx.chains[0]
+                    aptamer.create_sequence(best_old_sequence)
+
+                    cx.build()  # cached
+                    cx.positions = best_old_positions[:]
+
+                    if append:
+                        aptamer.append_sequence(ntide)
+                    else:
+                        aptamer.prepend_sequence(ntide)
+
+                    cx.rebuild()         # cached build + coordinate mapping
+                    cx.pert_min(size=0.5)  # light shake to find nearby minima
+
+                    positions0 = cx.positions[:]
+
+                    for _ in range(SECOND_CHUNK_SIZE):
+                        rotation = rotations.generator()
+
+                        # forward rotations on the new residue’s internal bonds
+                        for j in range(N_ELEMENTS - 1):
+                            if append:
+                                aptamer.rotate_in_residue(-1, j, rotation[j])
+                            else:
+                                aptamer.rotate_in_residue(0, j, rotation[j], reverse=True)
+
+                        # backward rotation (C3'-O3')
+                        if append:
+                            aptamer.rotate_in_residue(-2, 3, rotation[3])
+                        else:
+                            aptamer.rotate_in_residue(0, 3, rotation[3], reverse=True)
+
+                        energy = cx.get_energy()[0]
+                        if free_E is None or energy < free_E:
+                            free_E = energy
+                            position = cx.positions[:]
+                        energies.append(energy)
+
+                        cx.positions = positions0[:]
+
+                    entropy = S(energies, beta=BETA)
+
+                    with open(f"{JOB_NAME}_{i+1}_{ntide}.pdb", "w") as pdblog:
+                        app.PDBFile.writeModel(copy.deepcopy(cx.topology), position[:], file=pdblog, modelIndex=1)
+
+                    entropy_log.write(f"SEQUENCE: {aptamer.alias_sequence} ENTROPY: {entropy} ENERGY: {free_E}\n")
+
+                    if best_entropy is None or entropy < best_entropy:
+                        best_entropy = entropy
+                        best_positions = position[:]
+                        best_ntide = ntide
+                        best_sequence = aptamer.alias_sequence
+                        best_topology = copy.deepcopy(cx.topology)
+
+            app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
+            output.write(f"{datetime.now()}: Completed step {i+1}. Selected sequence: {best_sequence}\n")
+            with open(f"{JOB_NAME}_best_{i+1}_{best_ntide}.pdb", "w") as pdblog:
+                app.PDBFile.writeModel(best_topology, best_positions, file=pdblog, modelIndex=1)
+
+        # ---- Final render -------------------------------------------------------------
+        result_complex = copy.deepcopy(cpx)
+        aptamer = result_complex.chains[0]
+        aptamer.create_sequence(best_sequence)
+        result_complex.build()  # cached
+        result_complex.positions = best_positions[:]
+
+        with open(f"{JOB_NAME}_RESULT.pdb", "w") as pdb_result:
+            app.PDBFile.writeModel(result_complex.topology, result_complex.positions, file=pdb_result)
+
+        output.write(f"{datetime.now()}: Run completed. Thank you for using MAWS!\n\n")
+        output.write(f"Final sequence: {best_sequence}\n")
+
+
+if __name__ == "__main__":
+    main()
