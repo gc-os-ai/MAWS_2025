@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  jupyterlab:
+    build: .
+    ports:
+      - "8888:8888"
+    volumes:
+      - "./data:/dtu-denmark/notebooks"
+    environment:
+      - PATH=/miniconda/condabin:/miniconda/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}
+    user: "jupyter"

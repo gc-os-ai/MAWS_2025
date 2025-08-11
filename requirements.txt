@@ -1,0 +1,3 @@
+Requests==2.31.0
+RNA==0.11.0
+ViennaRNA==2.6.3

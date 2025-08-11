@@ -1,0 +1,14 @@
+name: AptaLoop
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9.17
+  - numba=0.57.1
+  - openmm=8.0.0
+  - mpmath=1.2.1
+  - ambertools=23.3
+  - ipykernel=6.19.2
+  - jupyterlab=3.3.2
+  - viennarna==2.6.3
