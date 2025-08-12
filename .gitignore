@@ -102,3 +102,9 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+#MAWS pdf files
+maws_*.pdb
+.maws_cache/
+*.in
+*.mdp

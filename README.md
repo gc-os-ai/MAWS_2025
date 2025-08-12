@@ -2,6 +2,8 @@
 
 Currently this code is unstructured and requires lot of binary dependencies, I am starting to remove and refactor these parts in code and removing the subprocesses call with python bindings.
 
+<img src=https://imgs.xkcd.com/comics/code_quality.png></img>
+
 ---
 
 # Team DTU-Denmark 2023 Software Tool: AptaLoop
