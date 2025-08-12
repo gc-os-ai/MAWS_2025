@@ -1,4 +1,0 @@
-source leaprc.DNA.OL15
-seq = sequence {DG DG DG DG DG DG DG DG DG }
-savepdb seq sequence.pdb
-quit
