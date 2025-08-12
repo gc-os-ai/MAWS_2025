@@ -29,7 +29,7 @@ class Structure(object):
     Parameters
     ----------
     residue_names : list[str]
-        Names of residue templates (e.g., ["A", "C", "G", "U"] or ["LIG"]).
+        Names of residue templates (e.g., ["A", "C", "G", "U"] or ["DCG"]).
     residue_length : list[int], optional
         Number of atoms per residue, aligned to `residue_names`.
     rotating_elements : list[tuple], optional
