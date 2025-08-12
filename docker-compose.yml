@@ -1,12 +1,26 @@
-version: '3.8'
+# version: '3.8'
+
+# services:
+#   jupyterlab:
+#     build: .
+#     ports:
+#       - "8888:8888"
+#     volumes:
+#       - "./data:/dtu-denmark/notebooks"
+#     environment:
+#       - PATH=/miniconda/condabin:/miniconda/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}
+#     user: "jupyter"
+
+version: "3.8"
 
 services:
-  jupyterlab:
+  maws-lab:
     build: .
     ports:
       - "8888:8888"
     volumes:
-      - "./data:/dtu-denmark/notebooks"
+      - ./:/workspace
     environment:
-      - PATH=/miniconda/condabin:/miniconda/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}
-    user: "jupyter"
+      - PYTHONPATH=/workspace/heidelberg_maws
+    user: "1000:1000"
+    tty: true

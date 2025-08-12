@@ -1,61 +1,46 @@
-# 1. Use stable Ubuntu LTS base
-FROM ubuntu:22.04
+# Lightweight conda base with mamba
+FROM condaforge/miniforge3:24.3.0-0
 
-# 2. Install essential packages, including HTTPS certs for wget
+SHELL ["/bin/bash", "-lc"]
+
+# System basics (optional but handy)
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    wget curl git file sudo build-essential ca-certificates && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tini && \
     rm -rf /var/lib/apt/lists/*
 
-# 3. Install Miniconda (not quiet, so we see errors if any)
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
-    bash Miniconda3-latest-Linux-x86_64.sh -b -p /miniconda && \
-    rm Miniconda3-latest-Linux-x86_64.sh
-ENV PATH="/miniconda/condabin:/miniconda/bin:${PATH}"
+# Workdir
+WORKDIR /workspace
 
-# 4. Optional: Install Linuxbrew (if needed)
-# RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# Copy env specs first to leverage Docker layer caching
+COPY environment.yml /tmp/environment.yml
+COPY requirements.txt /tmp/requirements.txt
 
-# 5. Clone your code repo
-RUN git clone https://gitlab.igem.org/2023/software-tools/dtu-denmark.git
+# Create "maws" env. If environment.yml is missing packages, we top it up explicitly.
+RUN mamba env create -n maws -f /tmp/environment.yml || mamba create -n maws -y python=3.11 && \
+    mamba install -n maws -y -c conda-forge \
+        ambertools \
+        openmm \
+        jupyterlab \
+        ipykernel && \
+    source activate maws && \
+    pip install -r /tmp/requirements.txt && \
+    mamba clean -afy
 
-# 6. Create Conda environment
-RUN conda env create --file dtu-denmark/environment.yml
+# Put the env on PATH so we don't need "conda activate" at runtime
+ENV PATH="/opt/conda/envs/maws/bin:${PATH}"
 
-# 7. Install science tools (AutoDock Vina, OpenBabel, GROMACS)
-RUN apt-get update && \
-    apt-get install -y autodock-vina openbabel cmake && \
-    rm -rf /var/lib/apt/lists/*
+# Copy repo (compose also mounts it; this lets the image run standalone too)
+COPY . /workspace
 
-# 8. Download & build GROMACS
-RUN curl -O https://ftp.gromacs.org/pub/gromacs/gromacs-2021.4.tar.gz && \
-    tar -xf gromacs-2021.4.tar.gz && \
-    mkdir /gromacs-2021.4/build
-WORKDIR /gromacs-2021.4/build
-RUN cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_USE_RDTSCP=OFF && \
-    make && \
-    make install && \
-    rm ../../gromacs-2021.4.tar.gz && \
-    rm -rf ../../gromacs-2021.4
-RUN ln -s /usr/local/gromacs/bin/gmx /usr/bin/gmx
+# (Optional) Register a Jupyter kernel for this env
+RUN python -m ipykernel install --sys-prefix --name maws --display-name "Python (MAWS)"
 
-# 9. Setup project folder and create user
-WORKDIR /dtu-denmark
-RUN useradd -ms /bin/bash jupyter && \
-    echo "jupyter ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jupyter
+# Non-root user for Jupyter
+RUN useradd -ms /bin/bash -u 1000 jupyter && \
+    chown -R jupyter:jupyter /workspace /opt/conda
 
-# 10. Set permissions for Jupyter user
-RUN chown -R jupyter:jupyter /miniconda/envs/AptaLoop && \
-    chown -R jupyter:jupyter /dtu-denmark && \
-    chmod -R 777 /dtu-denmark
-
-# 11. Switch to user
 USER jupyter
 
-# 12. Register kernel
-RUN /bin/bash -c "source /miniconda/bin/activate AptaLoop && \
-    python -m ipykernel install --user --name AptaLoop --display-name 'Python (AptaLoop)'"
-
-# 13. Run JupyterLab
 EXPOSE 8888
-CMD ["/bin/bash", "-c", "source /miniconda/bin/activate AptaLoop && jupyter lab --ip=0.0.0.0 --port=8888 --allow-root"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--NotebookApp.token=", "--notebook-dir=/workspace"]
