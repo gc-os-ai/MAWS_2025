@@ -30,7 +30,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="MAWS - Making Aptamers With Software")
     parser.add_argument("-n", "--name", type=str, default="MAWS_aptamer", help="Job name.")
     parser.add_argument("-nt", "--ntides", type=int, default=15, help="Number of nucleotides in the aptamer.")
-    parser.add_argument("-p", "--path", type=str, default="./pfoa.pdb", help="Path to your ligand PDB file.")
+    parser.add_argument("-p", "--path", type=str, default="./data/pfoa.pdb", help="Path to your ligand PDB file.")
     parser.add_argument("-ta", "--aptamertype", type=str, default="RNA", choices=["RNA", "DNA"],
                         help="Type of aptamer (DNA or RNA).")
     parser.add_argument("-tm", "--moleculetype", type=str, default="protein",
