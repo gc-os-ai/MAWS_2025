@@ -24,6 +24,8 @@ from Kernels import centerOfMass
 from LoadFrom import XMLStructure
 from Routines import S
 from helpers import nostrom
+from DNA import dna_structure
+from RNA import rna_structure
 
 
 def parse_args():
@@ -78,13 +80,15 @@ def main():
         output.write(f"Start time: {datetime.now()}\n")
 
         # Choose aptamer FF and residue XML
-        script_path = os.path.dirname(os.path.abspath(__file__))
+        # script_path = os.path.dirname(os.path.abspath(__file__))
         if APTAMER_TYPE == "RNA":
-            xml_molecule = XMLStructure(os.path.join(script_path, "RNA.xml"))
+            # xml_molecule = XMLStructure(os.path.join(script_path, "RNA.xml"))
+            xml_molecule = rna_structure()
             nt_list = "GAUC"
             force_field_aptamer = "leaprc.RNA.OL3"
         else:  # DNA
-            xml_molecule = XMLStructure(os.path.join(script_path, "DNA.xml"))
+            # xml_molecule = XMLStructure(os.path.join(script_path, "DNA.xml"))
+            xml_molecule  = dna_structure()
             nt_list = "GATC"
             force_field_aptamer = "leaprc.DNA.OL21"
         output.write(f"Force field selected for the aptamer: {force_field_aptamer}\n")
