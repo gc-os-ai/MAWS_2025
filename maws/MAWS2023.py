@@ -24,12 +24,17 @@ from Kernels import centerOfMass
 from Routines import S
 from helpers import nostrom
 <<<<<<< HEAD:maws/MAWS2023.py
+<<<<<<< HEAD:maws/MAWS2023.py
 from dna_structure import load_dna_structure
 from rna_structure import load_rna_structure
 =======
 from heidelberg_maws.dna_structure import dna_structure
 from heidelberg_maws.rna_structure import rna_structure
 >>>>>>> 4dc81b0 (Files are no longer needed and updated import in MAWS2023.py):heidelberg_maws/MAWS2023.py
+=======
+from dna_structure import dna_structure
+from rna_structure import rna_structure
+>>>>>>> a1412b5 (import modification in MAWS2023.py):heidelberg_maws/MAWS2023.py
 
 
 def parse_args():
