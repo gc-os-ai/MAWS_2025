@@ -21,11 +21,10 @@ from openmm import app, unit
 import Space
 from Complex import Complex
 from Kernels import centerOfMass
-from LoadFrom import XMLStructure
 from Routines import S
 from helpers import nostrom
-from DNA import dna_structure
-from RNA import rna_structure
+from heidelberg_maws.dna_structure import dna_structure
+from heidelberg_maws.rna_structure import rna_structure
 
 
 def parse_args():
