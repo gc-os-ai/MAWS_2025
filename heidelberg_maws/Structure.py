@@ -72,24 +72,59 @@ class Structure(object):
         Number of atoms per residue, aligned 1:1 with `residue_names`.
         (Used to normalize negative indices in backbone specs.)
     rotating_elements : Sequence[RotationSpec], optional
-        Triples `(residue, start, bond, end_or_None)`. Negative indices are allowed
-        and are interpreted later at runtime (NOT normalized here).
+        Triples ``(residue, start, bond, end_or_None)``. Negative indices are allowed
+        and are interpreted later at runtime (not normalized here).
     backbone_elements : Sequence[BackboneSpec], optional
-        Tuples `(residue, start, middle_pre, bond, middle_post, end)` possibly
-        containing negative indices, which are normalized here to positive using
-        the residue's length (from `residue_length`).
+        Tuples ``(residue, start, middle_pre, bond, middle_post, end)`` possibly
+        containing negative indices, which are normalized here to non-negative indices
+        using the residue's length (from `residue_length`).
     connect : Sequence[ConnectEntry], optional
         Per-residue connectivity:
-            [[append_first, append_last], [prepend_last, prepend_first], append_len, prepend_len]
-        Atom indices can be negative; lengths are floats in Å.
+        ``[[append_first, append_last], [prepend_last, prepend_first], append_len, prepend_len]``.
+        Atom indices can be negative; bond lengths are floats in Å.
     residue_path : str | None
-        Directory containing `<name>.lib` and `<name>.frcmod` for each residue.
-        If "", use current directory `"."`. If None, no LEaP `init_string` is produced.
+        Directory containing ``<name>.lib`` and ``<name>.frcmod`` for each residue.
+        If "", use the current directory ``"."``. If ``None``, no LEaP `init_string` is produced.
     alias : Sequence[Sequence[str]] | None
-        Alias mapping entries of the form `[residue_name, alone, start, middle, end]`.
-        Internally we store only `[alone, start, middle, end]` per `residue_name`.
-    """
+        Alias mapping entries of the form ``[residue_name, alone, start, middle, end]``.
+        Internally stored per residue as ``[alone, start, middle, end]``.
 
+    Notes
+    -----
+    - Indices are 0-based. Negative values mean "from the end" (Python-style).
+    - Backbone indices are normalized at construction time; rotation indices are not.
+    - `init_string` is generated deterministically from `residue_path` and `residue_names`.
+
+    Examples
+    --------
+    Build from the bundled RNA templates:
+
+    >>> from RNA import rna_structure
+    >>> s = rna_structure()
+    >>> s.residue_length["A"]
+    33
+    >>> s.torsions("A")[:2]
+    [(0, 3, None), (3, 4, None)]
+    >>> s.append_bond("A", prev_residue_length=33)
+    (0, 31, 1.6)
+    >>> s.translate("G A U")
+    'G5 A U3'
+
+    Minimal manual construction:
+
+    >>> s = Structure(
+    ...     residue_names=["X"],
+    ...     residue_length=[3],
+    ...     rotating_elements=[("X", 0, 1, None)],
+    ...     backbone_elements=[("X", 0, 1, 2, 1, 2)],
+    ...     connect=[[[0, -1], [-2, 0], 1.6, 1.6]],
+    ...     alias=[["X", "X", "X", "X", "X"]],
+    ... )
+    >>> s.resolve_index("X", -1)
+    2
+    >>> s.torsions("X")
+    [(0, 1, None)]
+    """
     def __init__(
         self,
         residue_names: Sequence[ResidueName],
