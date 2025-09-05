@@ -3,7 +3,7 @@
 # Produces a Structure.Structure identical to Loadfrom.XMLStructure("RNA.xml"), but without I/O.
 
 from typing import List, Tuple, Optional
-import Structure
+import heidelberg_maws.structure as structure
 
 # ---------------------------------------------------------------------------
 # Core tables (mirrors the order & values in RNA.xml)
@@ -185,7 +185,7 @@ __all__ = [
 # Factory
 # ---------------------------------------------------------------------------
 
-def rna_structure(residue_path: Optional[str] = None) -> Structure.Structure:
+def rna_structure(residue_path: Optional[str] = None) -> structure.Structure:
     """
     Build the RNA Structure object (inline replacement for XMLStructure('RNA.xml')).
 
@@ -201,7 +201,7 @@ def rna_structure(residue_path: Optional[str] = None) -> Structure.Structure:
     -------
     Structure.Structure
     """
-    return Structure.Structure(
+    return structure.Structure(
         RESIDUE_NAMES,
         RESIDUE_LENGTH,
         rotating_elements=ROTATIONS,

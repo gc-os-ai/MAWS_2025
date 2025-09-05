@@ -3,7 +3,7 @@
 # Produces a Structure.Structure identical to Loadfrom.XMLStructure("DNA.xml"), but without I/O.
 
 from typing import List, Tuple, Optional
-import Structure  # same directory import (matches existing code style)
+import heidelberg_maws.structure as structure  # same directory import (matches existing code style)
 
 # ---------------------------------------------------------------------------
 # Core tables (mirrors the order & values in DNA.xml)
@@ -190,7 +190,7 @@ __all__ = [
 # Factory
 # ---------------------------------------------------------------------------
 
-def dna_structure(residue_path: Optional[str] = None) -> Structure.Structure:
+def dna_structure(residue_path: Optional[str] = None) -> structure.Structure:
     """
     Build the DNA Structure object (inline replacement for XMLStructure('DNA.xml')).
 
@@ -206,7 +206,7 @@ def dna_structure(residue_path: Optional[str] = None) -> Structure.Structure:
     -------
     Structure.Structure
     """
-    return Structure.Structure(
+    return structure.Structure(
         RESIDUE_NAMES,
         RESIDUE_LENGTH,
         rotating_elements=ROTATIONS,
