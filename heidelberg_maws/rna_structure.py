@@ -178,14 +178,13 @@ __all__ = [
     "ROTATIONS",
     "CONNECT",
     "ALIASES",
-    "rna_structure",
 ]
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
-def rna_structure(residue_path: Optional[str] = None) -> structure.Structure:
+def load_rna_structure(residue_path: Optional[str] = None) -> structure.Structure:
     """
     Build the RNA Structure object (inline replacement for XMLStructure('RNA.xml')).
 

@@ -78,16 +78,13 @@ def main():
         output.write(f"Value of beta: {BETA}\n")
         output.write(f"Start time: {datetime.now()}\n")
 
-        # Choose aptamer FF and residue XML
-        # script_path = os.path.dirname(os.path.abspath(__file__))
+        # Choose aptamer FF and residue
         if APTAMER_TYPE == "RNA":
-            # xml_molecule = XMLStructure(os.path.join(script_path, "RNA.xml"))
-            xml_molecule = rna_structure()
+            molecule = rna_structure()
             nt_list = "GAUC"
             force_field_aptamer = "leaprc.RNA.OL3"
         else:  # DNA
-            # xml_molecule = XMLStructure(os.path.join(script_path, "DNA.xml"))
-            xml_molecule  = dna_structure()
+            molecule  = dna_structure()
             nt_list = "GATC"
             force_field_aptamer = "leaprc.DNA.OL21"
         output.write(f"Force field selected for the aptamer: {force_field_aptamer}\n")
@@ -103,7 +100,7 @@ def main():
 
         # Complex template with an empty aptamer chain + the ligand from PDB
         cpx = Complex(force_field_aptamer=force_field_aptamer, force_field_ligand=force_field_ligand)
-        cpx.add_chain('', xml_molecule)  # empty aptamer chain (sequence added later)
+        cpx.add_chain('', molecule)  # empty aptamer chain (sequence added later)
         cpx.add_chain_from_PDB(pdb_path=PDB_PATH,
                                force_field_aptamer=force_field_aptamer,
                                force_field_ligand=force_field_ligand,
