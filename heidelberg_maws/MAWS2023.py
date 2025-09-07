@@ -23,8 +23,8 @@ from Complex import Complex
 from Kernels import centerOfMass
 from Routines import S
 from helpers import nostrom
-from dna_structure import dna_structure
-from rna_structure import rna_structure
+from dna_structure import load_dna_structure
+from rna_structure import load_rna_structure
 
 
 def parse_args():
@@ -80,11 +80,11 @@ def main():
 
         # Choose aptamer FF and residue
         if APTAMER_TYPE == "RNA":
-            molecule = rna_structure()
+            molecule = load_rna_structure()
             nt_list = "GAUC"
             force_field_aptamer = "leaprc.RNA.OL3"
         else:  # DNA
-            molecule  = dna_structure()
+            molecule  = load_dna_structure()
             nt_list = "GATC"
             force_field_aptamer = "leaprc.DNA.OL21"
         output.write(f"Force field selected for the aptamer: {force_field_aptamer}\n")
