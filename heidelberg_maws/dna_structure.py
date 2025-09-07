@@ -183,14 +183,13 @@ __all__ = [
     "ROTATIONS",
     "CONNECT",
     "ALIASES",
-    "dna_structure",
 ]
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
-def dna_structure(residue_path: Optional[str] = None) -> structure.Structure:
+def load_dna_structure(residue_path: Optional[str] = None) -> structure.Structure:
     """
     Build the DNA Structure object (inline replacement for XMLStructure('DNA.xml')).
 
