@@ -6,44 +6,24 @@
 #
 # Modifications by DTU Biobuilders (2023) and additional refactor (2025)
 
-VERSION = "2.1"
-RELEASE_DATE = "2017"
-METHOD = "Kullback-Leibler"
-
 import argparse
 import copy
 from datetime import datetime
 
 import numpy as np
-<<<<<<< HEAD
 from openmm import app, unit
-
-import Space
-from Complex import Complex
-from Kernels import centerOfMass
-from Routines import S
-from helpers import nostrom
-<<<<<<< HEAD:maws/MAWS2023.py
-<<<<<<< HEAD:maws/MAWS2023.py
-=======
->>>>>>> f7192ef (WIP: save work before rebase)
-from dna_structure import load_dna_structure
-from helpers import nostrom
-from openmm import app, unit
-from rna_structure import load_rna_structure
-=======
-from heidelberg_maws.dna_structure import dna_structure
-from heidelberg_maws.rna_structure import rna_structure
->>>>>>> 4dc81b0 (Files are no longer needed and updated import in MAWS2023.py):heidelberg_maws/MAWS2023.py
-=======
-from dna_structure import dna_structure
-from rna_structure import rna_structure
->>>>>>> a1412b5 (import modification in MAWS2023.py):heidelberg_maws/MAWS2023.py
 
 import maws.space as space
 from maws.complex import Complex
+from maws.dna_structure import load_dna_structure
+from maws.helpers import nostrom
 from maws.kernels import centerOfMass
+from maws.rna_structure import load_rna_structure
 from maws.routines import S
+
+VERSION = "2.1"
+RELEASE_DATE = "2017"
+METHOD = "Kullback-Leibler"
 
 
 def parse_args():
@@ -113,7 +93,7 @@ def main():
     PDB_PATH = args.path
     APTAMER_TYPE = args.aptamertype
     MOLECULE_TYPE = args.moleculetype
-    N_ELEMENTS = 4  # number of rotable junctions in RNA/DNA, to distinguish forward/backward rotation
+    N_ELEMENTS = 4  # rotatable backbone torsions per residue
 
     # Logs
     with (
@@ -185,9 +165,11 @@ def main():
         )
         c.build()
 
-        # Sampling spaces
-        # Create a sampling Cube of width 20 Å around the ligand center of mass
-        cube = space.Cube(20.0, centerOfMass(np.asarray(nostrom(c.positions))))
+        # Sampling spaces: cube of width 20 Å around ligand COM
+        cube = space.Cube(
+            20.0,
+            centerOfMass(np.asarray(nostrom(c.positions))),
+        )
         rotations = space.NAngles(N_ELEMENTS)
 
         # Tracking best candidate
@@ -199,25 +181,25 @@ def main():
 
         output.write("Initialized successfully!\n")
 
-        # ---- Step 1: choose the first nucleotide ----------------------------------
+        # ---- Step 1: choose the first nucleotide ----------------------------
         for ntide in nt_list:
             output.write(f"{datetime.now()}: starting initial step for '{ntide}'\n")
             energies = []
             free_E = None
             position = None
 
-            # clone the template complex
+            # Clone the template complex
             cx = copy.deepcopy(cpx)
             aptamer = cx.chains[0]
 
-            # seed sequence and build (LEaP build will hit cache after first time)
+            # Seed sequence and build (LEaP build will hit cache after first time)
             aptamer.create_sequence(ntide)
             cx.build()
 
-            # remember initial positions
+            # Remember initial positions
             positions0 = cx.positions[:]
 
-            # sample orientations/rotations
+            # Sample orientations/rotations
             for _ in range(FIRST_CHUNK_SIZE):
                 orientation = cube.generator()
                 rotation = rotations.generator()
@@ -236,19 +218,23 @@ def main():
                     position = cx.positions[:]
                 energies.append(energy)
 
-                # reset for next sample
+                # Reset for next sample
                 cx.positions = positions0[:]
 
             entropy = S(energies, beta=BETA)
 
-            # outputs
+            # Outputs
             with open(f"{JOB_NAME}_1_{ntide}.pdb", "w") as pdblog:
                 app.PDBFile.writeModel(
-                    copy.deepcopy(cx.topology), position[:], file=pdblog, modelIndex=1
+                    copy.deepcopy(cx.topology),
+                    position[:],
+                    file=pdblog,
+                    modelIndex=1,
                 )
 
             entropy_log.write(
-                f"SEQUENCE: {aptamer.alias_sequence} ENTROPY: {entropy} ENERGY: {free_E}\n"
+                f"SEQUENCE: {aptamer.alias_sequence} "
+                f"ENTROPY: {entropy} ENERGY: {free_E}\n"
             )
 
             if best_entropy is None or entropy < best_entropy:
@@ -258,7 +244,7 @@ def main():
                 best_positions = position[:]
                 best_topology = copy.deepcopy(cx.topology)
 
-        # cache best-of-step to file
+        # Cache best-of-step to file
         app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
         with open(f"{JOB_NAME}_best_1_{best_ntide}.pdb", "w") as pdblog:
             app.PDBFile.writeModel(
@@ -266,13 +252,15 @@ def main():
             )
 
         output.write(
-            f"{datetime.now()}: Completed first step. Selected nucleotide: {best_sequence}\n"
+            f"{datetime.now()}: Completed first step. "
+            f"Selected nucleotide: {best_sequence}\n"
         )
         output.write(
-            f"{datetime.now()}: Starting further steps to append {N_NTIDES} nucleotides\n"
+            f"{datetime.now()}: Starting further steps to append "
+            f"{N_NTIDES} nucleotides\n"
         )
 
-        # ---- Steps 2..N: grow sequence ------------------------------------------------
+        # ---- Steps 2..N: grow sequence --------------------------------------
         for i in range(1, N_NTIDES):
             best_old_sequence = best_sequence
             best_old_positions = best_positions[:]
@@ -304,7 +292,7 @@ def main():
                     for _ in range(SECOND_CHUNK_SIZE):
                         rotation = rotations.generator()
 
-                        # forward rotations on the new residue’s internal bonds
+                        # Forward rotations on the new residue’s internal bonds
                         for j in range(N_ELEMENTS - 1):
                             if append:
                                 aptamer.rotate_in_residue(-1, j, rotation[j])
@@ -313,7 +301,7 @@ def main():
                                     0, j, rotation[j], reverse=True
                                 )
 
-                        # backward rotation (C3'-O3')
+                        # Backward rotation (C3'-O3')
                         if append:
                             aptamer.rotate_in_residue(-2, 3, rotation[3])
                         else:
@@ -338,7 +326,8 @@ def main():
                         )
 
                     entropy_log.write(
-                        f"SEQUENCE: {aptamer.alias_sequence} ENTROPY: {entropy} ENERGY: {free_E}\n"
+                        f"SEQUENCE: {aptamer.alias_sequence} "
+                        f"ENTROPY: {entropy} ENERGY: {free_E}\n"
                     )
 
                     if best_entropy is None or entropy < best_entropy:
@@ -352,14 +341,15 @@ def main():
                 best_topology, best_positions, file=step, modelIndex=1
             )
             output.write(
-                f"{datetime.now()}: Completed step {i + 1}. Selected sequence: {best_sequence}\n"
+                f"{datetime.now()}: Completed step {i + 1}. "
+                f"Selected sequence: {best_sequence}\n"
             )
             with open(f"{JOB_NAME}_best_{i + 1}_{best_ntide}.pdb", "w") as pdblog:
                 app.PDBFile.writeModel(
                     best_topology, best_positions, file=pdblog, modelIndex=1
                 )
 
-        # ---- Final render -------------------------------------------------------------
+        # ---- Final render ----------------------------------------------------
         result_complex = copy.deepcopy(cpx)
         aptamer = result_complex.chains[0]
         aptamer.create_sequence(best_sequence)
