@@ -19,19 +19,17 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from openmm import app
-from openmm.app import PDBFile, Modeller, ForceField
-
+from openmm.app import ForceField, Modeller, PDBFile
 from tools import find_exe, run
 
 
 def makeLib(
     file_path: str | Path,
     residue_name: str,
-    connect0: Optional[str] = None,
-    connect1: Optional[str] = None,
+    connect0: str | None = None,
+    connect1: str | None = None,
     charges: str = "bcc",
     atom_type: str = "gaff",
     force_field_aptamer: str = "leaprc.RNA.OL3",
@@ -210,7 +208,9 @@ def toggleHydrogens(path: str, add: bool = True, ph: float = 7.0) -> None:
         ff = ForceField("amber19-all.xml", "amber19/tip3pfb.xml")
         modeller.addHydrogens(ff, pH=ph)
     else:
-        hydrogens = [a for a in modeller.getTopology().atoms() if a.element.symbol == "H"]
+        hydrogens = [
+            a for a in modeller.getTopology().atoms() if a.element.symbol == "H"
+        ]
         modeller.delete(hydrogens)
     with open(path, "w") as f:
         PDBFile.writeFile(modeller.getTopology(), modeller.getPositions(), f)
