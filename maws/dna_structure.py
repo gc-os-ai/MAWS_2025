@@ -2,13 +2,8 @@
 # Inline DNA residue templates for MAWS (formerly DNA.xml)
 # Produces a Structure.Structure identical to Loadfrom.XMLStructure("DNA.xml"), but without I/O.
 
-<<<<<<< HEAD
 from typing import List, Tuple, Optional
 import maws.structure as structure
-=======
-
-import maws.structure as structure  # same directory import (matches existing code style)
->>>>>>> f7192ef (WIP: save work before rebase)
 
 # ---------------------------------------------------------------------------
 # Core tables (mirrors the order & values in DNA.xml)
