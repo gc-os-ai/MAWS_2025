@@ -3,7 +3,7 @@
 # Produces a Structure.Structure identical to Loadfrom.XMLStructure("DNA.xml"), but without I/O.
 
 from typing import List, Tuple, Optional
-import heidelberg_maws.structure as structure  # same directory import (matches existing code style)
+import maws.structure as structure  # same directory import (matches existing code style)
 
 # ---------------------------------------------------------------------------
 # Core tables (mirrors the order & values in DNA.xml)

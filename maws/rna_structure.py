@@ -3,7 +3,7 @@
 # Produces a Structure.Structure identical to Loadfrom.XMLStructure("RNA.xml"), but without I/O.
 
 from typing import List, Tuple, Optional
-import heidelberg_maws.structure as structure
+import maws.structure as structure
 
 # ---------------------------------------------------------------------------
 # Core tables (mirrors the order & values in RNA.xml)
