@@ -7,14 +7,14 @@ from pathlib import Path
 
 import numpy as np
 import openmm as mm
-from helpers import angle as ang
-from helpers import nostrom
 from openmm import app, unit
-from tools import find_exe, run
 
 from maws.chain import Chain  # runtime import is one-way: Complex -> Chain
+from maws.helpers import angle as ang
+from maws.helpers import nostrom
 from maws.prepare import makeLib
 from maws.structure import *  # Structure, etc.
+from maws.tools import find_exe, run
 
 
 class Complex:

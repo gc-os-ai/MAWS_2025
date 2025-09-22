@@ -19,12 +19,7 @@ Notes
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-
-# Support Python < 3.10 for TypeAlias
-try:
-    from typing import TypeAlias  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
-    from typing import TypeAlias
+from typing import TypeAlias
 
 # ── Type aliases to make shapes explicit ─────────────────────────────────────
 ResidueName: TypeAlias = str

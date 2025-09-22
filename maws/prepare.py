@@ -22,7 +22,8 @@ from pathlib import Path
 
 from openmm import app
 from openmm.app import ForceField, Modeller, PDBFile
-from tools import find_exe, run
+
+from maws.tools import find_exe, run
 
 
 def makeLib(

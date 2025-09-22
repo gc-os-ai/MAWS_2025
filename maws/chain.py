@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Only for static type checkers; avoids runtime circular import
-    from .complex import Complex
+    from maws.complex import Complex
 
 
 class Chain:
