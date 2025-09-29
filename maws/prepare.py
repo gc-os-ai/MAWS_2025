@@ -1,6 +1,4 @@
 """
-prepare.py
-
 Thin, testable wrappers around AmberTools executables for ligand/fragment prep,
 plus a pure-Python hydrogen toggle using OpenMM.
 
@@ -26,7 +24,7 @@ from openmm.app import ForceField, Modeller, PDBFile
 from maws.tools import find_exe, run
 
 
-def makeLib(
+def make_lib(
     file_path: str | Path,
     residue_name: str,
     connect0: str | None = None,
@@ -184,7 +182,7 @@ def makeLib(
     return length
 
 
-def toggleHydrogens(path: str, add: bool = True, ph: float = 7.0) -> None:
+def toggle_hydrogens(path: str, add: bool = True, ph: float = 7.0) -> None:
     """
     Add or strip hydrogens in-place on a PDB using OpenMM Modeller.
 
