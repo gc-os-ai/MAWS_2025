@@ -145,7 +145,7 @@ def main():
             force_field_ligand=force_field_ligand,
         )
         cpx.add_chain("", molecule)  # empty aptamer chain (sequence added later)
-        cpx.add_chain_from_PDB(
+        cpx.add_chain_from_pdb(
             pdb_path=PDB_PATH,
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
@@ -157,7 +157,7 @@ def main():
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
         )
-        c.add_chain_from_PDB(
+        c.add_chain_from_pdb(
             pdb_path=PDB_PATH,
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
