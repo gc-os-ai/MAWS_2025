@@ -18,48 +18,52 @@ Notes
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from collections.abc import Iterable, Sequence
 
 # Support Python < 3.10 for TypeAlias
 try:
     from typing import TypeAlias  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover
-    from typing_extensions import TypeAlias  # type: ignore[assignment, import-not-found]
+    from typing import TypeAlias
 
 # ── Type aliases to make shapes explicit ─────────────────────────────────────
 ResidueName: TypeAlias = str
-AtomIndex: TypeAlias = int  # 0-based; negative values mean "from the end" (Python-style)
+AtomIndex: TypeAlias = (
+    int  # 0-based; negative values mean "from the end" (Python-style)
+)
 
 # Rotation specification provided at construction time
 # (residue, start_atom_idx, bond_atom_idx, end_atom_idx_or_None)
-RotationSpec: TypeAlias = Tuple[ResidueName, AtomIndex, AtomIndex, Optional[AtomIndex]]
+RotationSpec: TypeAlias = tuple[ResidueName, AtomIndex, AtomIndex, AtomIndex | None]
 
 # Backbone specification provided at construction time
 # (residue, start, middle_pre, bond, middle_post, end) — raw indices (may be negative)
-BackboneSpec: TypeAlias = Tuple[ResidueName, AtomIndex, AtomIndex, AtomIndex, AtomIndex, AtomIndex]
+BackboneSpec: TypeAlias = tuple[
+    ResidueName, AtomIndex, AtomIndex, AtomIndex, AtomIndex, AtomIndex
+]
 
 # Stored backbone entry after normalization to positive indices:
 # [[start, middle_pre, bond], [middle_post, end]]
-BackboneEntry: TypeAlias = List[List[int]]
+BackboneEntry: TypeAlias = list[list[int]]
 
 # A single rotation triple stored internally as a list: [start, bond, end_or_None]
-RotTripleStored: TypeAlias = List[Optional[int]]
+RotTripleStored: TypeAlias = list[int | None]
 
 # The per-residue rotation list.
 # IMPORTANT: we use a sentinel value [None] to mean "not defined yet".
 # Otherwise it is a list of [start, bond, end] triples.
-RotListStored: TypeAlias = List[RotTripleStored]  # OR the sentinel: [None]
+RotListStored: TypeAlias = list[RotTripleStored]  # OR the sentinel: [None]
 
 # Alias entry stored per residue: [alone, start, middle, end]
-AliasEntry: TypeAlias = List[str]
+AliasEntry: TypeAlias = list[str]
 
 # Connectivity entry stored per residue:
 # [[append_first, append_last], [prepend_last, prepend_first], append_bond_len, prepend_bond_len]
 # Atom indices may be negative (Python-style). Bond lengths are in Å.
-ConnectEntry: TypeAlias = List[Union[List[int], float]]
+ConnectEntry: TypeAlias = list[list[int] | float]
 
 
-class Structure(object):
+class Structure:
     """
     Container for residue templates and per-residue topology rules.
 
@@ -125,22 +129,23 @@ class Structure(object):
     >>> s.torsions("X")
     [(0, 1, None)]
     """
+
     def __init__(
         self,
         residue_names: Sequence[ResidueName],
-        residue_length: Optional[Sequence[int]] = None,
-        rotating_elements: Optional[Sequence[RotationSpec]] = None,
-        backbone_elements: Optional[Sequence[BackboneSpec]] = None,
-        connect: Optional[Sequence[ConnectEntry]] = None,
-        residue_path: Optional[str] = None,
-        alias: Optional[Sequence[Sequence[str]]] = None,
+        residue_length: Sequence[int] | None = None,
+        rotating_elements: Sequence[RotationSpec] | None = None,
+        backbone_elements: Sequence[BackboneSpec] | None = None,
+        connect: Sequence[ConnectEntry] | None = None,
+        residue_path: str | None = None,
+        alias: Sequence[Sequence[str]] | None = None,
     ):
         # Ordered list of residue template names used throughout this object.
-        self.residue_names: List[ResidueName] = list(residue_names)
+        self.residue_names: list[ResidueName] = list(residue_names)
 
         # Path for LEaP resources; if None, we do not emit LEaP commands.
         # If "", treat as current directory ".".
-        self.residue_path: Optional[str] = residue_path
+        self.residue_path: str | None = residue_path
 
         # LEaP bootstrap string (lines like `loadoff X.lib` and `loadamberparams X.frcmod`)
         self.init_string: str = ""
@@ -148,19 +153,18 @@ class Structure(object):
             base = self.residue_path if self.residue_path != "" else "."
             for name in self.residue_names:
                 self.init_string += (
-                    f"loadoff {base}/{name}.lib\n"
-                    f"loadamberparams {base}/{name}.frcmod\n"
+                    f"loadoff {base}/{name}.lib\nloadamberparams {base}/{name}.frcmod\n"
                 )
 
         # Map residue -> atom count (used to normalize negative indices for backbone)
-        self.residue_length: Dict[ResidueName, int] = {}
+        self.residue_length: dict[ResidueName, int] = {}
         if residue_length:
             for idx, res in enumerate(self.residue_names):
                 self.residue_length[res] = int(residue_length[idx])
 
         # Map residue -> connectivity entry.
         # Default if not provided: [[0, -1], [-2, 0], 1.6, 1.6]
-        self.connect: Dict[ResidueName, ConnectEntry] = {}
+        self.connect: dict[ResidueName, ConnectEntry] = {}
         if connect:
             for idx, res in enumerate(self.residue_names):
                 self.connect[res] = list(connect[idx])
@@ -171,7 +175,9 @@ class Structure(object):
 
         # Map residue -> alias entry [alone, start, middle, end]
         # Initialize to identity mapping for known residues.
-        self.alias: Dict[ResidueName, AliasEntry] = {res: [res, res, res, res] for res in self.residue_names}
+        self.alias: dict[ResidueName, AliasEntry] = {
+            res: [res, res, res, res] for res in self.residue_names
+        }
         if alias:
             # incoming entries are [name, alone, start, middle, end]
             for elem in alias:
@@ -182,7 +188,7 @@ class Structure(object):
 
         # Map residue -> rotation list.
         # Start each residue with a sentinel [None] meaning "no rotations defined yet".
-        self.rotating_elements: Dict[ResidueName, RotListStored] = {}
+        self.rotating_elements: dict[ResidueName, RotListStored] = {}
         for name in self.residue_names:
             self.rotating_elements[name] = [None]  # sentinel
 
@@ -191,17 +197,24 @@ class Structure(object):
                 if self.rotating_elements[residue] == [None]:
                     self.rotating_elements[residue] = [[start, bond, end]]
                 elif self.rotating_elements.get(residue) is None:
-                    raise ValueError("Residue does not exist! CANNOT assign rotability!")
+                    raise ValueError(
+                        "Residue does not exist! CANNOT assign rotability!"
+                    )
                 else:
                     self.rotating_elements[residue].append([start, bond, end])
 
         # Map residue -> normalized backbone entry:
         # [[start, middle_pre, bond], [middle_post, end]] with all indices >= 0.
-        self.backbone_elements: Dict[ResidueName, BackboneEntry] = {}
+        self.backbone_elements: dict[ResidueName, BackboneEntry] = {}
         if backbone_elements:
             for residue, start, middle_pre, bond, middle_post, end in backbone_elements:
-                if residue not in self.residue_length or self.residue_length[residue] <= 0:
-                    raise ValueError(f"Backbone specified for {residue!r} but its length is not set.")
+                if (
+                    residue not in self.residue_length
+                    or self.residue_length[residue] <= 0
+                ):
+                    raise ValueError(
+                        f"Backbone specified for {residue!r} but its length is not set."
+                    )
                 L = self.residue_length[residue]
 
                 def norm(i: int) -> int:
@@ -224,9 +237,9 @@ class Structure(object):
     def add_rotation(
         self,
         residue_name: ResidueName,
-        rotations: Union[Tuple[int, int, Optional[int]], Iterable[Tuple[int, int, Optional[int]]]],
+        rotations: tuple[int, int, int | None] | Iterable[tuple[int, int, int | None]],
         basestring: type = str,  # kept for backward-compat with old API that passed `str`
-    ) -> Dict[ResidueName, RotListStored]:
+    ) -> dict[ResidueName, RotListStored]:
         """
         Add new rotating-element definitions for a residue.
 
@@ -255,15 +268,23 @@ class Structure(object):
 
         if is_triplet(rotations):
             start, bond, end = rotations  # type: ignore[index]
-            self.rotating_elements[residue_name].append([int(start), int(bond), None if end is None else int(end)])
+            self.rotating_elements[residue_name].append(
+                [int(start), int(bond), None if end is None else int(end)]
+            )
         elif isinstance(rotations, Iterable):
             for rot in rotations:  # type: ignore[assignment]
                 if not is_triplet(rot):
-                    raise ValueError("Each rotation must be a [start, bond, end] triple.")
+                    raise ValueError(
+                        "Each rotation must be a [start, bond, end] triple."
+                    )
                 s, b, e = rot  # type: ignore[misc]
-                self.rotating_elements[residue_name].append([int(s), int(b), None if e is None else int(e)])
+                self.rotating_elements[residue_name].append(
+                    [int(s), int(b), None if e is None else int(e)]
+                )
         else:
-            raise ValueError("rotations must be a triple or an iterable of triples [start, bond, end].")
+            raise ValueError(
+                "rotations must be a triple or an iterable of triples [start, bond, end]."
+            )
 
         return self.rotating_elements
 
@@ -309,8 +330,8 @@ class Structure(object):
     def append_bond(
         self,
         residue: ResidueName,
-        prev_residue_length: Optional[int] = None,
-    ) -> Tuple[int, int, float]:
+        prev_residue_length: int | None = None,
+    ) -> tuple[int, int, float]:
         """
         Return the (new_atom_idx, old_atom_idx, bond_length) used when APPENDING this residue
         to the right (3') end of an existing chain.
@@ -323,7 +344,9 @@ class Structure(object):
             * otherwise returned as stored (may be negative, i.e., relative to the PREVIOUS residue).
         """
         try:
-            append_pair, _, append_len, _ = self.connect[residue]  # [[new_first, old_last], [..], append_len, ..]
+            append_pair, _, append_len, _ = self.connect[
+                residue
+            ]  # [[new_first, old_last], [..], append_len, ..]
         except KeyError as e:
             raise ValueError(f"No connectivity entry for residue {residue!r}") from e
 
@@ -331,7 +354,9 @@ class Structure(object):
         new_idx = self.resolve_index(residue, int(new_first))
 
         if prev_residue_length is not None:
-            old_idx = old_last + int(prev_residue_length) if old_last < 0 else int(old_last)
+            old_idx = (
+                old_last + int(prev_residue_length) if old_last < 0 else int(old_last)
+            )
         else:
             old_idx = int(old_last)
 
@@ -340,8 +365,8 @@ class Structure(object):
     def prepend_bond(
         self,
         residue: ResidueName,
-        next_residue_length: Optional[int] = None,
-    ) -> Tuple[int, int, float]:
+        next_residue_length: int | None = None,
+    ) -> tuple[int, int, float]:
         """
         Symmetric helper for PREPENDING this residue to the left (5') end of an existing chain.
 
@@ -351,7 +376,9 @@ class Structure(object):
             resolved if `next_residue_length` is provided, else returned as stored (may be negative).
         """
         try:
-            _, prepend_pair, _, prepend_len = self.connect[residue]  # [[..], [old_last, old_first], .., prepend_len]
+            _, prepend_pair, _, prepend_len = self.connect[
+                residue
+            ]  # [[..], [old_last, old_first], .., prepend_len]
         except KeyError as e:
             raise ValueError(f"No connectivity entry for residue {residue!r}") from e
 
@@ -359,13 +386,17 @@ class Structure(object):
         new_idx = self.resolve_index(residue, int(new_last))
 
         if next_residue_length is not None:
-            old_idx = old_first + int(next_residue_length) if old_first < 0 else int(old_first)
+            old_idx = (
+                old_first + int(next_residue_length)
+                if old_first < 0
+                else int(old_first)
+            )
         else:
             old_idx = int(old_first)
 
         return new_idx, old_idx, float(prepend_len)
 
-    def torsions(self, residue: ResidueName) -> List[Tuple[int, int, Optional[int]]]:
+    def torsions(self, residue: ResidueName) -> list[tuple[int, int, int | None]]:
         """
         Return all rotation triples for `residue` with indices normalized to absolute 0-based.
         Each item is (start, bond, end_or_None). If end is None, it stays None.
@@ -380,14 +411,16 @@ class Structure(object):
             raise ValueError(f"Length not set for residue {residue!r}")
         L = self.residue_length[residue]
 
-        def norm(x: Optional[int]) -> Optional[int]:
+        def norm(x: int | None) -> int | None:
             if x is None:
                 return None
             return x + L if x < 0 else x
 
-        out: List[Tuple[int, int, Optional[int]]] = []
+        out: list[tuple[int, int, int | None]] = []
         for t in triples:
             # t is [start, bond, end_or_None]
-            s = int(t[0]); b = int(t[1]); e = t[2] if (t[2] is None) else int(t[2])
+            s = int(t[0])
+            b = int(t[1])
+            e = t[2] if (t[2] is None) else int(t[2])
             out.append((norm(s), norm(b), norm(e)))  # type: ignore[arg-type]
         return out
