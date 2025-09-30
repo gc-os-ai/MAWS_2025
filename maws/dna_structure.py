@@ -1,9 +1,4 @@
-# DNA.py
-# Inline DNA residue templates for MAWS (formerly DNA.xml)
-# Produces a Structure.Structure identical to Loadfrom.XMLStructure("DNA.xml"), but without I/O.
-
-
-import maws.structure as structure  # same directory import (matches existing code style)
+import maws.structure as structure
 
 # ---------------------------------------------------------------------------
 # Core tables (mirrors the order & values in DNA.xml)

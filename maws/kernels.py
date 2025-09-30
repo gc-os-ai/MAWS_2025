@@ -1,4 +1,5 @@
 # Kompilierte Versionen der rechenintensiven Operationen
+# Complied Version of the computational intensive operations
 
 import numpy as np
 from numba import jit
