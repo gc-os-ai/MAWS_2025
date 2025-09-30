@@ -466,8 +466,8 @@ class Complex:
                     mm.Vec3(0, 0, 0) * unit.angstroms
                     - pos[chain.structure.connect[chain.append_history[0]][0][0]]
                 )
-                s = np.math.sin(phi_2)
-                c = np.math.cos(phi_2)
+                s = np.sin(phi_2)
+                c = np.cos(phi_2)
                 rot = np.array(
                     [
                         [
