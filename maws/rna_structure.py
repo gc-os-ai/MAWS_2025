@@ -1,8 +1,3 @@
-# RNA.py
-# Inline RNA residue templates for MAWS (formerly RNA.xml)
-# Produces a Structure.Structure identical to Loadfrom.XMLStructure("RNA.xml"), but without I/O.
-
-
 import maws.structure as structure
 
 # ---------------------------------------------------------------------------
