@@ -20,52 +20,57 @@ import copy
 import hashlib
 import json
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
-from openmm import unit
-from openmm import app
 import openmm as mm
-
-from Prepare import makeLib
 from helpers import angle as ang
-from helpers import directed_angle as d_ang
-from helpers import (angstrom, nostrom, kJ, noJ)
+from helpers import nostrom
+from openmm import app, unit
+from Prepare import makeLib
 from Structure import *
 from tools import find_exe, run
 
 
 ## Represents a molecule chain, comprising multiple residues
-class Chain(object):
+class Chain:
     """
     A polymer chain backed by a Structure template. Maintains sequence state,
     residue start indices, and provides rotation/translation helpers that
     delegate to the parent Complex.
     """
 
-    def __init__(self, Complex, Structure, sequence: Optional[str] = None, start: int = 0, ID: int = 0):
+    def __init__(
+        self,
+        Complex,
+        Structure,
+        sequence: str | None = None,
+        start: int = 0,
+        ID: int = 0,
+    ):
         self.id = ID
         self.start = start
         self.start_history = start
         self.complex = Complex
-        self.residues_start: List[int] = []
+        self.residues_start: list[int] = []
         self.length = 0
         self.length_history = self.length
         self.element = [self.start, self.start + 1, self.start + self.length]
         self.structure = Structure
-        self.alias_sequence = ''
-        self.sequence = ''
-        self.sequence_array: List[str] = []
-        self.alias_sequence_array: List[str] = []
-        self.append_history: List[str] = []
-        self.prepend_history: List[str] = []
+        self.alias_sequence = ""
+        self.sequence = ""
+        self.sequence_array: list[str] = []
+        self.alias_sequence_array: list[str] = []
+        self.append_history: list[str] = []
+        self.prepend_history: list[str] = []
 
         if sequence:
             self.alias_sequence = sequence
             self.sequence = self.structure.translate(self.alias_sequence)
-            self.sequence_array = self.sequence.split(' ')
-            self.alias_sequence_array = self.alias_sequence.split(' ')
-            self.length = sum(map(self.structure.residue_length.__getitem__, self.sequence_array))
+            self.sequence_array = self.sequence.split(" ")
+            self.alias_sequence_array = self.alias_sequence.split(" ")
+            self.length = sum(
+                map(self.structure.residue_length.__getitem__, self.sequence_array)
+            )
             self.length_history = self.length
             tally = 0
             for residue in self.sequence_array:
@@ -79,7 +84,9 @@ class Chain(object):
         Users should not call this directly; it's invoked by sequence mutators.
         """
         length = self.length
-        self.length = sum(map(self.structure.residue_length.__getitem__, self.sequence_array))
+        self.length = sum(
+            map(self.structure.residue_length.__getitem__, self.sequence_array)
+        )
         self.residues_start = []
         tally = 0
         for residue in self.sequence_array:
@@ -93,7 +100,11 @@ class Chain(object):
             if chain.start >= start:
                 chain.start += self.length - length
                 chain.start_history += 0
-                chain.element = [chain.start, chain.start + 1, chain.start + chain.length]
+                chain.element = [
+                    chain.start,
+                    chain.start + 1,
+                    chain.start + chain.length,
+                ]
 
         self.start -= self.length - length
         self.start_history -= 0
@@ -106,11 +117,11 @@ class Chain(object):
         After calling this, you must call Complex.build()/rebuild() to realize
         the new topology/coordinates.
         """
-        alias_sequence_array = sequence.split(' ')
-        sequence_array = self.structure.translate(sequence).split(' ')
+        alias_sequence_array = sequence.split(" ")
+        sequence_array = self.structure.translate(sequence).split(" ")
         for letter in sequence_array:
             if letter not in self.structure.residue_names:
-                raise ValueError('Residue not defined! CANNOT create sequence!')
+                raise ValueError("Residue not defined! CANNOT create sequence!")
         self.alias_sequence = sequence
         self.sequence = self.structure.translate(self.alias_sequence)
         self.alias_sequence_array = alias_sequence_array
@@ -138,7 +149,9 @@ class Chain(object):
         self.create_sequence(" ".join([sequence] + self.alias_sequence_array[:]))
         self.length_history = length
         self.start_history = self.start + self.length - length
-        self.prepend_history = self.sequence_array[:len(self.sequence_array) - seq_ar_length]
+        self.prepend_history = self.sequence_array[
+            : len(self.sequence_array) - seq_ar_length
+        ]
 
     def rotate_element(self, element, angle: float, reverse: bool = False):
         """
@@ -158,14 +171,22 @@ class Chain(object):
             revised_element = [index + self.start for index in revised_element]
             self.complex.rotate_element(revised_element, angle, reverse=rev)
         elif len(revised_element) == 3 and revised_element[2] is None:
-            revised_element = [revised_element[0] + self.start,
-                               revised_element[1] + self.start,
-                               self.length + self.start]
+            revised_element = [
+                revised_element[0] + self.start,
+                revised_element[1] + self.start,
+                self.length + self.start,
+            ]
             self.complex.rotate_element(revised_element, angle, reverse=rev)
         else:
-            raise ValueError('Rotable element contains too many or too few components!')
+            raise ValueError("Rotable element contains too many or too few components!")
 
-    def rotate_in_residue(self, residue_index: int, residue_element_index: int, angle: float, reverse: bool = False):
+    def rotate_in_residue(
+        self,
+        residue_index: int,
+        residue_element_index: int,
+        angle: float,
+        reverse: bool = False,
+    ):
         """
         Rotate one of the pre-defined rotating elements of a residue in this chain.
 
@@ -184,38 +205,61 @@ class Chain(object):
         revised_residue_index = residue_index
         if residue_index < 0:
             revised_residue_index += len(self.sequence_array)
-        element = self.structure.rotating_elements[self.sequence_array[revised_residue_index]][residue_element_index]
+        element = self.structure.rotating_elements[
+            self.sequence_array[revised_residue_index]
+        ][residue_element_index]
         # normalize possibly negative element indices
         for i in range(len(element)):
             if element[i] and element[i] < 0:
-                element[i] += self.structure.residue_length[self.sequence_array[revised_residue_index]]
+                element[i] += self.structure.residue_length[
+                    self.sequence_array[revised_residue_index]
+                ]
 
             if element[2] is None:
-                revised_element = [element[0] + self.residues_start[revised_residue_index],
-                                   element[1] + self.residues_start[revised_residue_index], None]
+                revised_element = [
+                    element[0] + self.residues_start[revised_residue_index],
+                    element[1] + self.residues_start[revised_residue_index],
+                    None,
+                ]
             elif element[2] == 0:
-                revised_element = [element[0] + self.residues_start[revised_residue_index],
-                                   element[1] + self.residues_start[revised_residue_index],
-                                   element[2]]
+                revised_element = [
+                    element[0] + self.residues_start[revised_residue_index],
+                    element[1] + self.residues_start[revised_residue_index],
+                    element[2],
+                ]
             else:
-                revised_element = [element[0] + self.residues_start[revised_residue_index],
-                                   element[1] + self.residues_start[revised_residue_index],
-                                   element[2] + self.residues_start[revised_residue_index]]
+                revised_element = [
+                    element[0] + self.residues_start[revised_residue_index],
+                    element[1] + self.residues_start[revised_residue_index],
+                    element[2] + self.residues_start[revised_residue_index],
+                ]
                 rev = False
             self.rotate_element(revised_element, angle, reverse=rev)
 
     # deprecated helpers kept for compatibility
     def rotate_historic_element(self, historic_element, angle: float):
         if historic_element[2]:
-            self.rotate_element([historic_element[0] + self.start_history - self.start,
-                                 historic_element[1] + self.start_history - self.start,
-                                 historic_element[2] + self.start_history - self.start], angle)
+            self.rotate_element(
+                [
+                    historic_element[0] + self.start_history - self.start,
+                    historic_element[1] + self.start_history - self.start,
+                    historic_element[2] + self.start_history - self.start,
+                ],
+                angle,
+            )
         else:
-            self.rotate_element([historic_element[0] + self.start_history - self.start,
-                                 historic_element[0] + self.start_history - self.start,
-                                 None], angle)
+            self.rotate_element(
+                [
+                    historic_element[0] + self.start_history - self.start,
+                    historic_element[0] + self.start_history - self.start,
+                    None,
+                ],
+                angle,
+            )
 
-    def rotate_in_historic_residue(self, historic_index: int, element_index: int, angle: float):
+    def rotate_in_historic_residue(
+        self, historic_index: int, element_index: int, angle: float
+    ):
         offset = len(self.prepend_history)
         self.rotate_in_residue(historic_index + offset, element_index, angle)
 
@@ -229,7 +273,7 @@ class Chain(object):
 
 
 ## Represents a complex containing multiple molecule chains.
-class Complex(object):
+class Complex:
     """
     Collection of Chain objects that can be built via LEaP into AMBER prmtop/inpcrd
     and simulated/queried via OpenMM.
@@ -244,9 +288,12 @@ class Complex(object):
         Ignored (kept for backward compatibility).
     """
 
-    def __init__(self, force_field_aptamer: str = "leaprc.RNA.OL3",
-                 force_field_ligand: str = "leaprc.protein.ff19SB",
-                 conda_env: str = "maws_p3"):
+    def __init__(
+        self,
+        force_field_aptamer: str = "leaprc.RNA.OL3",
+        force_field_ligand: str = "leaprc.protein.ff19SB",
+        conda_env: str = "maws_p3",
+    ):
         self.build_string = f"""
                             source {force_field_aptamer}
                             source {force_field_ligand}
@@ -255,7 +302,7 @@ class Complex(object):
         self.inpcrd = None
         self.positions = None
         self.topology = None
-        self.chains: List[Chain] = []
+        self.chains: list[Chain] = []
         self.system = None
         self.integrator = None
         self.simulation = None
@@ -271,19 +318,31 @@ class Complex(object):
         else:
             start = 0
             chainID = 0
-        self.chains.append(Chain(self, structure, sequence=sequence, start=start, ID=chainID))
+        self.chains.append(
+            Chain(self, structure, sequence=sequence, start=start, ID=chainID)
+        )
 
-    def add_chain_from_PDB(self, pdb_path: str, force_field_aptamer: str, force_field_ligand: str,
-                           structure=None, pdb_name: str = 'LIG', parameterized: bool = False):
+    def add_chain_from_PDB(
+        self,
+        pdb_path: str,
+        force_field_aptamer: str,
+        force_field_ligand: str,
+        structure=None,
+        pdb_name: str = "LIG",
+        parameterized: bool = False,
+    ):
         """
         Create a one-residue Structure from a PDB (or pre-parameterized building block),
         generate its .lib/.frcmod via makeLib, and add as a Chain.
         """
         # makeLib no longer accepts conda_env; tools must be on PATH
-        length = makeLib(pdb_path, pdb_name,
-                         force_field_aptamer=force_field_aptamer,
-                         force_field_ligand=force_field_ligand,
-                         parameterized=parameterized)
+        length = makeLib(
+            pdb_path,
+            pdb_name,
+            force_field_aptamer=force_field_aptamer,
+            force_field_ligand=force_field_ligand,
+            parameterized=parameterized,
+        )
         path = str(Path(pdb_path).resolve().parent)
         structure = Structure([pdb_name], residue_length=[length], residue_path=path)
         self.add_chain(pdb_name, structure)
@@ -299,7 +358,9 @@ class Complex(object):
         """
         payload = {
             "build": " ".join(self.build_string.split()),  # normalize whitespace
-            "inits": [("".join(ch.structure.init_string.split())) for ch in self.chains],
+            "inits": [
+                ("".join(ch.structure.init_string.split())) for ch in self.chains
+            ],
             "seqs": [ch.sequence for ch in self.chains],
         }
         return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -320,7 +381,7 @@ class Complex(object):
             Base name for output files (prmtop/inpcrd). Ignored by cache when reusing.
         """
         if not self.chains:
-            raise ValueError('Empty Complex! CANNOT build!')
+            raise ValueError("Empty Complex! CANNOT build!")
 
         # Assemble LEaP input
         build_string_base = self.build_string
@@ -330,7 +391,9 @@ class Complex(object):
         for index, chain in enumerate(self.chains):
             if chain.sequence:
                 leap_str.append(f"CHAIN{index} = sequence {{{chain.sequence}}}")
-        chain_names = [f"CHAIN{idx}" for idx, ch in enumerate(self.chains) if ch.sequence]
+        chain_names = [
+            f"CHAIN{idx}" for idx, ch in enumerate(self.chains) if ch.sequence
+        ]
         chain_string = " ".join(chain_names)
         leap_str.append(f"UNION = combine {{{chain_string}}}")
         out_prefix = f"{target_path}{file_name}"
@@ -356,7 +419,9 @@ class Complex(object):
             produced_prm = Path(f"{out_prefix}.prmtop")
             produced_crd = Path(f"{out_prefix}.inpcrd")
             if not (produced_prm.exists() and produced_crd.exists()):
-                raise RuntimeError("LEaP did not produce expected .prmtop/.inpcrd outputs.")
+                raise RuntimeError(
+                    "LEaP did not produce expected .prmtop/.inpcrd outputs."
+                )
             produced_prm.replace(cache_prm)
             produced_crd.replace(cache_crd)
 
@@ -366,15 +431,22 @@ class Complex(object):
         self.inpcrd = app.AmberInpcrdFile(str(cache_crd))
         self.topology = self.prmtop.topology
         self.positions = self.inpcrd.positions
-        self.integrator = mm.LangevinIntegrator(300. * unit.kelvin, 1. / unit.picosecond, 0.002 * unit.picoseconds)
-        self.system = self.prmtop.createSystem(nonbondedCutoff=5 * unit.angstrom,
-                                               nonbondedMethod=app.NoCutoff,
-                                               constraints=None, implicitSolvent=app.OBC1)
+        self.integrator = mm.LangevinIntegrator(
+            300.0 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
+        )
+        self.system = self.prmtop.createSystem(
+            nonbondedCutoff=5 * unit.angstrom,
+            nonbondedMethod=app.NoCutoff,
+            constraints=None,
+            implicitSolvent=app.OBC1,
+        )
         self.simulation = app.Simulation(self.topology, self.system, self.integrator)
 
     # ---- Geometry utilities -------------------------------------------------
 
-    def rebuild(self, target_path: str = "", file_name: str = "out", exclusion: list = []):
+    def rebuild(
+        self, target_path: str = "", file_name: str = "out", exclusion: list = []
+    ):
         """
         Rebuild prmtop/inpcrd/topology/positions after sequence changes, attempting to
         preserve coordinates of atoms outside the modified regions.
@@ -386,42 +458,80 @@ class Complex(object):
             if chain in exclusion:
                 continue
 
-            pre_positions = self.positions[chain.start:chain.start_history]
-            chain_positions = old_positions[chain.start:chain.start + chain.length_history]
-            post_positions = self.positions[chain.start_history + chain.length_history:chain.start + chain.length]
+            pre_positions = self.positions[chain.start : chain.start_history]
+            chain_positions = old_positions[
+                chain.start : chain.start + chain.length_history
+            ]
+            post_positions = self.positions[
+                chain.start_history + chain.length_history : chain.start + chain.length
+            ]
 
             if len(pre_positions) != 0 and chain.prepend_history:
                 # ---- fix prepended atoms ----
-                pre_positions = self.positions[chain.start:chain.start_history + 1]
-                pre_vector = self.positions[chain.start_history + chain.structure.connect[chain.prepend_history[-1]][1][0]] - self.positions[chain.start_history + 1]
-                old_pre_vector = old_positions[chain.start] - old_positions[chain.start + 1]
+                pre_positions = self.positions[chain.start : chain.start_history + 1]
+                pre_vector = (
+                    self.positions[
+                        chain.start_history
+                        + chain.structure.connect[chain.prepend_history[-1]][1][0]
+                    ]
+                    - self.positions[chain.start_history + 1]
+                )
+                old_pre_vector = (
+                    old_positions[chain.start] - old_positions[chain.start + 1]
+                )
                 angle = -ang(nostrom(pre_vector), nostrom(old_pre_vector))
-                axis = np.cross(np.asarray(nostrom(pre_vector)), np.asarray(nostrom(old_pre_vector)))
+                axis = np.cross(
+                    np.asarray(nostrom(pre_vector)), np.asarray(nostrom(old_pre_vector))
+                )
                 if all(axis == np.zeros(3)):
-                    axis = np.array([1., 0., 0.])
+                    axis = np.array([1.0, 0.0, 0.0])
                     angle = 0
                 else:
                     axis /= np.linalg.norm(axis)
                 x, y, z = axis
-                phi_2 = angle / 2.
+                phi_2 = angle / 2.0
                 pos = pre_positions[:]
-                shift_forward = mm.Vec3(0, 0, 0) * unit.angstroms - pos[-1 + chain.structure.connect[chain.prepend_history[-1]][1][0]]
+                shift_forward = (
+                    mm.Vec3(0, 0, 0) * unit.angstroms
+                    - pos[-1 + chain.structure.connect[chain.prepend_history[-1]][1][0]]
+                )
                 s = np.math.sin(phi_2)
                 c = np.math.cos(phi_2)
-                rot = np.array([[2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1, 2 * x * y * np.power(s, 2) - 2 * z * c * s,
-                                 2 * x * z * np.power(s, 2) + 2 * y * c * s],
-                                [2 * x * y * np.power(s, 2) + 2 * z * c * s, 2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1,
-                                 2 * z * y * np.power(s, 2) - 2 * x * c * s],
-                                [2 * x * z * np.power(s, 2) - 2 * y * c * s, 2 * z * y * np.power(s, 2) + 2 * x * c * s,
-                                 2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1]])
+                rot = np.array(
+                    [
+                        [
+                            2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1,
+                            2 * x * y * np.power(s, 2) - 2 * z * c * s,
+                            2 * x * z * np.power(s, 2) + 2 * y * c * s,
+                        ],
+                        [
+                            2 * x * y * np.power(s, 2) + 2 * z * c * s,
+                            2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1,
+                            2 * z * y * np.power(s, 2) - 2 * x * c * s,
+                        ],
+                        [
+                            2 * x * z * np.power(s, 2) - 2 * y * c * s,
+                            2 * z * y * np.power(s, 2) + 2 * x * c * s,
+                            2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1,
+                        ],
+                    ]
+                )
 
                 for j in range(0, len(pos)):
                     pos[j] += shift_forward
 
                 # bond-length correction for the new connection
-                shift_back = chain_positions[chain.structure.connect[chain.sequence_array[len(chain.prepend_history)]][1][1]]
-                pre_bond_shift = (chain.structure.connect[chain.prepend_history[-1]][2]) * old_pre_vector / np.linalg.norm(
-                    np.asarray(nostrom(old_pre_vector))) - old_pre_vector
+                shift_back = chain_positions[
+                    chain.structure.connect[
+                        chain.sequence_array[len(chain.prepend_history)]
+                    ][1][1]
+                ]
+                pre_bond_shift = (
+                    (chain.structure.connect[chain.prepend_history[-1]][2])
+                    * old_pre_vector
+                    / np.linalg.norm(np.asarray(nostrom(old_pre_vector)))
+                    - old_pre_vector
+                )
 
                 for j in range(0, len(pos)):
                     roted = np.dot(np.array(pos[j].value_in_unit(unit.angstrom)), rot)
@@ -431,39 +541,80 @@ class Complex(object):
                 pre_positions = pos[:]
                 chain_positions[0] += pre_bond_shift
 
-                self.positions = self.positions[:chain.start] + pre_positions[:] + chain_positions[1:] + self.positions[chain.start + chain.length:]
+                self.positions = (
+                    self.positions[: chain.start]
+                    + pre_positions[:]
+                    + chain_positions[1:]
+                    + self.positions[chain.start + chain.length :]
+                )
 
             if len(post_positions) != 0 and chain.append_history:
                 # ---- fix appended atoms ----
-                post_positions = self.positions[chain.start_history + chain.length_history - 1:chain.start_history + chain.length]
-                post_vector = self.positions[chain.start_history + chain.length_history - 1] - self.positions[chain.start_history + chain.length_history - 2]
-                old_post_vector = old_positions[chain.start_history + chain.length_history - 1] - old_positions[chain.start_history + chain.length_history - 2]
+                post_positions = self.positions[
+                    chain.start_history + chain.length_history - 1 : chain.start_history
+                    + chain.length
+                ]
+                post_vector = (
+                    self.positions[chain.start_history + chain.length_history - 1]
+                    - self.positions[chain.start_history + chain.length_history - 2]
+                )
+                old_post_vector = (
+                    old_positions[chain.start_history + chain.length_history - 1]
+                    - old_positions[chain.start_history + chain.length_history - 2]
+                )
                 angle = -ang(nostrom(post_vector), nostrom(old_post_vector))
-                axis = np.cross(np.asarray(nostrom(post_vector)), np.asarray(nostrom(old_post_vector)))
+                axis = np.cross(
+                    np.asarray(nostrom(post_vector)),
+                    np.asarray(nostrom(old_post_vector)),
+                )
                 if all(axis == np.zeros(3)):
-                    axis = np.array([1., 0., 0.])
-                    angle = 0.
+                    axis = np.array([1.0, 0.0, 0.0])
+                    angle = 0.0
                 else:
                     axis /= np.linalg.norm(axis)
                 x, y, z = axis
-                phi_2 = angle / 2.
+                phi_2 = angle / 2.0
                 pos = post_positions[:]
-                shift_forward = mm.Vec3(0, 0, 0) * unit.angstroms - pos[chain.structure.connect[chain.append_history[0]][0][0]]
+                shift_forward = (
+                    mm.Vec3(0, 0, 0) * unit.angstroms
+                    - pos[chain.structure.connect[chain.append_history[0]][0][0]]
+                )
                 s = np.math.sin(phi_2)
                 c = np.math.cos(phi_2)
-                rot = np.array([[2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1, 2 * x * y * np.power(s, 2) - 2 * z * c * s,
-                                 2 * x * z * np.power(s, 2) + 2 * y * c * s],
-                                [2 * x * y * np.power(s, 2) + 2 * z * c * s, 2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1,
-                                 2 * z * y * np.power(s, 2) - 2 * x * c * s],
-                                [2 * x * z * np.power(s, 2) - 2 * y * c * s, 2 * z * y * np.power(s, 2) + 2 * x * c * s,
-                                 2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1]])
+                rot = np.array(
+                    [
+                        [
+                            2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1,
+                            2 * x * y * np.power(s, 2) - 2 * z * c * s,
+                            2 * x * z * np.power(s, 2) + 2 * y * c * s,
+                        ],
+                        [
+                            2 * x * y * np.power(s, 2) + 2 * z * c * s,
+                            2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1,
+                            2 * z * y * np.power(s, 2) - 2 * x * c * s,
+                        ],
+                        [
+                            2 * x * z * np.power(s, 2) - 2 * y * c * s,
+                            2 * z * y * np.power(s, 2) + 2 * x * c * s,
+                            2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1,
+                        ],
+                    ]
+                )
 
                 for j in range(0, len(pos)):
                     pos[j] += shift_forward
 
-                post_bond_shift = (chain.structure.connect[chain.append_history[0]][2]) * old_post_vector / np.linalg.norm(
-                    np.asarray(nostrom(old_post_vector))) - old_post_vector
-                shift_back = chain_positions[chain.structure.connect[chain.sequence_array[-len(chain.append_history)]][0][1]]
+                post_bond_shift = (
+                    (chain.structure.connect[chain.append_history[0]][2])
+                    * old_post_vector
+                    / np.linalg.norm(np.asarray(nostrom(old_post_vector)))
+                    - old_post_vector
+                )
+                shift_back = chain_positions[
+                    chain.structure.connect[
+                        chain.sequence_array[-len(chain.append_history)]
+                    ][0][1]
+                ]
 
                 for pos_idx, pos_elem in enumerate(pos):
                     roted = np.dot(np.array(pos_elem.value_in_unit(unit.angstrom)), rot)
@@ -472,40 +623,72 @@ class Complex(object):
 
                 post_positions = pos[:]
                 chain_positions[-1] += post_bond_shift
-                self.positions = self.positions[:chain.start] + chain_positions[:-1] + post_positions[:] + self.positions[chain.start + chain.length:]
+                self.positions = (
+                    self.positions[: chain.start]
+                    + chain_positions[:-1]
+                    + post_positions[:]
+                    + self.positions[chain.start + chain.length :]
+                )
 
             if not (chain.append_history or chain.prepend_history):
-                self.positions = (self.positions[:chain.start]
-                                  + old_positions[chain.start_history:chain.start_history + chain.length_history]
-                                  + self.positions[chain.start + chain.length:])
+                self.positions = (
+                    self.positions[: chain.start]
+                    + old_positions[
+                        chain.start_history : chain.start_history + chain.length_history
+                    ]
+                    + self.positions[chain.start + chain.length :]
+                )
 
     def rotate_element(self, element, angle: float, reverse: bool = False):
         """Rotate a contiguous element [start, bond, end] by angle (radians)."""
         revised_element = element[:]
         if not self.positions:
-            raise ValueError('This Complex contains no positions! You CANNOT rotate!')
+            raise ValueError("This Complex contains no positions! You CANNOT rotate!")
         pos = self.positions[:]
-        vec_a = (pos[revised_element[1]] - pos[revised_element[0]])
+        vec_a = pos[revised_element[1]] - pos[revised_element[0]]
         if revised_element[2] <= revised_element[0]:
             revised_element_1 = revised_element[1]
             revised_element[1] = revised_element[2]
             revised_element[2] = revised_element_1
         self.rotate_global(revised_element, vec_a, angle, reverse=reverse, glob=False)
 
-    def rotate_global(self, element, axis, angle: float, reverse: bool = False, glob: bool = True):
+    def rotate_global(
+        self, element, axis, angle: float, reverse: bool = False, glob: bool = True
+    ):
         """Rotate either whole chain (glob=True) or sub-element (glob=False) around axis by angle."""
         if not self.positions:
-            raise ValueError('This Complex contains no positions! You CANNOT rotate!')
-        x, y, z = np.asarray(nostrom(axis)) / (np.linalg.norm(np.asarray(nostrom(axis))))
-        phi_2 = angle / 2.
+            raise ValueError("This Complex contains no positions! You CANNOT rotate!")
+        x, y, z = np.asarray(nostrom(axis)) / (
+            np.linalg.norm(np.asarray(nostrom(axis)))
+        )
+        phi_2 = angle / 2.0
         pos = self.positions[:]
         starting_index = 0 if glob else 1
-        shift_forward = mm.Vec3(0, 0, 0) * unit.angstroms - pos[element[2] if reverse else element[starting_index]]
+        shift_forward = (
+            mm.Vec3(0, 0, 0) * unit.angstroms
+            - pos[element[2] if reverse else element[starting_index]]
+        )
         s = np.math.sin(phi_2)
         c = np.math.cos(phi_2)
-        rot = np.array([[2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1, 2 * x * y * np.power(s, 2) - 2 * z * c * s, 2 * x * z * np.power(s, 2) + 2 * y * c * s],
-                        [2 * x * y * np.power(s, 2) + 2 * z * c * s, 2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1, 2 * z * y * np.power(s, 2) - 2 * x * c * s],
-                        [2 * x * z * np.power(s, 2) - 2 * y * c * s, 2 * z * y * np.power(s, 2) + 2 * x * c * s, 2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1]])
+        rot = np.array(
+            [
+                [
+                    2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1,
+                    2 * x * y * np.power(s, 2) - 2 * z * c * s,
+                    2 * x * z * np.power(s, 2) + 2 * y * c * s,
+                ],
+                [
+                    2 * x * y * np.power(s, 2) + 2 * z * c * s,
+                    2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1,
+                    2 * z * y * np.power(s, 2) - 2 * x * c * s,
+                ],
+                [
+                    2 * x * z * np.power(s, 2) - 2 * y * c * s,
+                    2 * z * y * np.power(s, 2) + 2 * x * c * s,
+                    2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1,
+                ],
+            ]
+        )
 
         for j in range(element[starting_index], element[2]):
             pos[j] += shift_forward
@@ -519,7 +702,9 @@ class Complex(object):
     def translate_global(self, element, shift):
         """Translate either whole chain (glob) or a sub-element by the given shift (OpenMM Quantity)."""
         if not self.positions:
-            raise ValueError('This Complex contains no positions! You CANNOT translate!')
+            raise ValueError(
+                "This Complex contains no positions! You CANNOT translate!"
+            )
         vec_shift = shift
         pos = self.positions[:]
         for j in range(element[0], element[2]):
@@ -531,7 +716,9 @@ class Complex(object):
     def get_energy(self):
         """Return (potential_energy_kJ_per_mol, positions)."""
         self.simulation.context.setPositions(self.positions)
-        state = self.simulation.context.getState(getPositions=True, getEnergy=True, groups=1)
+        state = self.simulation.context.getState(
+            getPositions=True, getEnergy=True, groups=1
+        )
         free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         return free_E, self.positions
 
@@ -539,7 +726,9 @@ class Complex(object):
         """Local energy minimization (OpenMM). Returns final potential energy (kJ/mol)."""
         self.simulation.context.setPositions(self.positions)
         self.simulation.minimizeEnergy(maxIterations=max_iterations)
-        state = self.simulation.context.getState(getPositions=True, getEnergy=True, groups=1)
+        state = self.simulation.context.getState(
+            getPositions=True, getEnergy=True, groups=1
+        )
         self.positions = state.getPositions()
         free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         return free_E
@@ -561,9 +750,18 @@ class Complex(object):
                 for idx, residue in enumerate(chain.sequence_array):
                     for j in range(max_step_iterations):
                         positions = self.positions[:]
-                        chain.rotate_in_residue(idx,
-                                                np.random.choice([elem for elem in range(len(chain.structure.rotating_elements[residue]))]),
-                                                np.random.uniform(-np.math.pi, np.math.pi))
+                        chain.rotate_in_residue(
+                            idx,
+                            np.random.choice(
+                                [
+                                    elem
+                                    for elem in range(
+                                        len(chain.structure.rotating_elements[residue])
+                                    )
+                                ]
+                            ),
+                            np.random.uniform(-np.math.pi, np.math.pi),
+                        )
                         free_E = self.get_energy()[0]
                         if free_E < energy or energy is None:
                             energy = free_E
