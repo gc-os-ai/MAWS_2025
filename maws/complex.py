@@ -1,13 +1,52 @@
-# maws/complex.py
+"""
+maws.complex
+============
+
+High-level container that composes one or more :class:`maws.chain.Chain` objects
+and materializes them into AMBER topology/coordinates (``.prmtop``/``.inpcrd``)
+using AmberTools LEaP, then into OpenMM objects for simulation.
+
+
+A :class:`~maws.complex.Complex` collects chains, builds AMBER artifacts with a
+deterministic content-addressed cache (under ``.maws_cache/``), and exposes
+OpenMM objects for energy queries and MD. Identical inputs never re-run LEaP.
+
+Key ideas
+---------
+- A single flat coordinate array (``positions``) holds atoms of **all** chains.
+  Each chain records a ``start`` offset and a ``length`` to index its slice.
+- Static chemistry (residue lengths, alias mapping, connectivity, torsions)
+  lives in :class:`maws.structure.Structure`. A :class:`~maws.chain.Chain`
+  references a :class:`~maws.structure.Structure` and translates any alias
+  sequence to a canonical sequence for LEaP.
+- Disk I/O is bounded: template generation in :func:`maws.prepare.make_lib`,
+  and build/load in :meth:`maws.complex.Complex.build`. Everything else is
+  in-memory.
+- External tools (e.g., ``tleap``, ``antechamber``, ``parmchk2``) are discovered
+  on ``PATH``.
+
+Dependencies
+------------
+AmberTools (for LEaP and optional parameterization) and OpenMM.
+
+See Also
+--------
+maws.chain.Chain
+maws.structure.Structure
+maws.prepare.make_lib
+"""
+
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import openmm as mm
 from openmm import app, unit
+from openmm.unit import Quantity
 
 from maws.chain import Chain
 from maws.helpers import angle as ang
@@ -20,48 +59,76 @@ from maws.tools import find_exe, run
 class Complex:
     """
     Container for one or more :class:`~maws.chain.Chain` objects that can be
-    materialized via AmberTools LEaP (AMBER ``.prmtop``/``.inpcrd``) and
-    simulated or queried via OpenMM.
+    materialized with AmberTools LEaP and simulated or queried with OpenMM.
 
-    The :class:`Complex` owns:
-      - the list of chains (topology composition),
-      - the *coordinates* and OpenMM objects (``positions``, ``topology``,
-        ``system``, ``integrator``, and ``simulation``),
-      - the LEaP build preamble (``build_string``) and a deterministic
-        caching mechanism that avoids repeated LEaP runs for identical inputs.
+    Extended Summary
+    ----------------
+    A :class:`Complex` stores the chain list (topology composition), the current
+    simulation state (coordinates and OpenMM objects), and a LEaP preamble
+    (``build_string``). Builds are content-addressed and cached so identical
+    inputs reuse existing AMBER artifacts.
 
-    Notes
-    -----
-    - All atoms from all chains are stored as a **single flat list** in
-      :attr:`positions`. Each chain keeps a ``start`` offset and a ``length``
-      so it can address its slice of atoms.
-    - LEaP builds are cached in ``.maws_cache/``. The cache key is a SHA1
-      hash over:
-        * normalized ``build_string`` (force-field ``source`` lines),
-        * each chain's LEaP ``init_string`` (``loadoff``/``loadamberparams``),
-        * each chain's *canonical* sequence (after alias translation).
-    - External tools must be discoverable on ``PATH``.
+    Design notes
+    ------------
+    Composition vs. builder
+      - ``Complex`` **owns**:
+        * the collection of :class:`~maws.chain.Chain` objects (topology),
+        * the simulation state (``positions``, ``topology``, ``system``,
+          ``integrator``, ``simulation``),
+        * the LEaP preamble (``build_string``) and the cache.
+      - Each :class:`Chain` **references** a :class:`maws.structure.Structure`,
+        which provides residue lengths, alias mapping, connectivity, and torsion
+        rules. A chain stores both the alias sequence and the **canonical**
+        LEaP sequence via ``Structure.translate(...)``.
+      - :meth:`Complex.build` acts as a *builder/materializer*: it turns the spec
+        (chains + structures + preamble) into AMBER artifacts and OpenMM objects.
+
+    File I/O boundaries
+      - ``add_chain_from_pdb(...)`` calls :func:`maws.prepare.make_lib`, which
+        works in a temporary directory and moves artifacts **next to the input**:
+        ``<name>.lib`` and, when parameterization is needed, ``<name>.frcmod``.
+      - :meth:`build(...)``:
+          1) writes ``<target>/<file>.in`` (LEaP input),
+          2) runs ``tleap`` (found via :func:`maws.tools.find_exe`),
+          3) moves the produced ``.prmtop``/``.inpcrd`` into
+             ``.maws_cache/<sha1>.{prmtop,inpcrd}``,
+          4) loads those cached files into OpenMM.
+        **No other methods write to disk**; geometry and MD are in-memory.
+
+    Cache key
+      The deterministic SHA1 covers:
+        - normalized ``build_string`` (whitespace collapsed),
+        - each chain's ``structure.init_string`` (whitespace removed),
+        - each chain's **canonical** sequence string (from ``Structure.translate``).
+      Identical inputs reuse the same cached build.
 
     Attributes
     ----------
     build_string : str
-        LEaP preamble, typically a pair of ``source`` lines for aptamer and ligand FFs.
-    prmtop : app.AmberPrmtopFile | None
+        LEaP preamble (typically a sequence of ``source ...`` lines).
+    prmtop : openmm.app.AmberPrmtopFile | None
         Loaded AMBER topology after :meth:`build`.
-    inpcrd : app.AmberInpcrdFile | None
+    inpcrd : openmm.app.AmberInpcrdFile | None
         Loaded AMBER coordinates after :meth:`build`.
-    topology : app.Topology | None
-        OpenMM topology object loaded from the AMBER files.
-    positions : list[mm.Vec3] | None
-        Coordinates for the whole complex (Å). Updated by geometry ops and MD.
-    chains : list[Chain]
-        Chain collection in build order (their ``start`` indices are monotonic).
-    system : mm.System | None
-        OpenMM System created by :meth:`build`.
-    integrator : mm.Integrator | None
-        OpenMM integrator (defaults to Langevin).
-    simulation : app.Simulation | None
-        OpenMM Simulation wrapper with context.
+    positions : list[openmm.Vec3] | None
+        Flat coordinate array over **all** chains, populated by :meth:`build`
+        or updated by geometry/MD methods. Length equals total atom count.
+    topology : openmm.app.Topology | None
+        OpenMM topology built from the AMBER files.
+    chains : list[:class:`maws.chain.Chain`]
+        Chains in insertion order.
+    system : openmm.System | None
+        OpenMM system created from ``prmtop``.
+    integrator : openmm.Integrator | None
+        OpenMM integrator (default: Langevin).
+    simulation : openmm.app.Simulation | None
+        OpenMM Simulation object initialized on :meth:`build`.
+
+    Notes
+    -----
+    - Distances are Å and angles are radians unless stated otherwise.
+    - Cache directory: ``.maws_cache/`` with files ``<sha1>.prmtop`` and
+      ``<sha1>.inpcrd``.
     """
 
     def __init__(
@@ -299,7 +366,7 @@ class Complex:
         )
         self.simulation = app.Simulation(self.topology, self.system, self.integrator)
 
-    # ------------------------------------------------------------ Geometry ops
+    # ---------------------------------  Geometry ops---------------
 
     def rebuild(
         self,
@@ -525,16 +592,20 @@ class Complex:
                     + self.positions[chain.start + chain.length :]
                 )
 
-    def rotate_element(self, element, angle: float, reverse: bool = False) -> None:
+    def rotate_element(
+        self, element: Sequence[int], angle: float, reverse: bool = False
+    ) -> None:
         """
-        Rotate a contiguous **global** element of atoms by ``angle`` radians.
+        Rotate a contiguous **global** element by ``angle`` radians.
 
         Parameters
         ----------
-        element : list[int]
-            Triple ``[start, bond, end_exclusive]`` in **global** atom indices.
+        element : Sequence[int]
+            ``[start, bond, end_exclusive]`` in **global** atom indices.
+            The rotation axis is computed internally as
+            ``positions[bond] - positions[start]`` (this is a unit-bearing vector).
         angle : float
-            Rotation angle in radians.
+            Rotation angle in **radians**.
         reverse : bool, default=False
             Passed through to :meth:`rotate_global` to rotate the complementary
             segment when applicable.
@@ -542,14 +613,9 @@ class Complex:
         Raises
         ------
         ValueError
-            If :attr:`positions` is not initialized (call :meth:`build` first).
-
-        Notes
-        -----
-        This convenience method computes the axis as
-        ``positions[bond] - positions[start]`` and forwards to
-        :meth:`rotate_global` for the actual rotation.
+            If :attr:`positions` is not initialized.
         """
+
         revised_element = element[:]
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
@@ -562,34 +628,52 @@ class Complex:
         self.rotate_global(revised_element, vec_a, angle, reverse=reverse, glob=False)
 
     def rotate_global(
-        self, element, axis, angle: float, reverse: bool = False, glob: bool = True
+        self,
+        element: Sequence[int],
+        axis: Quantity,  # must have length units (Å)
+        angle: float,
+        reverse: bool = False,
+        glob: bool = True,
     ) -> None:
         """
-        Core rotation kernel (Rodrigues-style matrix) for either the whole chain
+        Core rotation kernel (Rodrigues-style) for either the whole chain
         (``glob=True``) or a sub-element (``glob=False``).
 
         Parameters
         ----------
-        element : list[int]
-            ``[start, bond, end_exclusive]`` in **global** indices. If ``reverse``
-            is True, the pivot is taken from ``element[2]`` (end) instead of the
-            start/bond pair for the purpose of the pre/post shifts.
-        axis : array-like
-            Rotation axis (direction is used after normalization).
+        element : Sequence[int]
+            ``[start, bond, end_exclusive]`` in **global** atom indices.
+            If ``reverse`` is True, the pivot used for the pre/post shifts is
+            taken from ``element[2]`` (end) instead of the start/bond pair.
+        axis : openmm.unit.Quantity
+            Rotation axis as a 3-vector **with length units** (Å).
+            Examples:
+            ``np.array([0, 1, 0]) * unit.angstrom``,
+            ``mm.Vec3(0, 1, 0) * unit.angstrom``.
+            A raw NumPy array **without units is not accepted**—pass through
+            :func:`maws.helpers.angstrom` if you need to attach units.
         angle : float
-            Angle in radians.
+            Rotation angle in **radians**.
         reverse : bool, default=False
             If True, rotate the **complement** of the selected range relative to
-            the pivot.
+            the pivot (see ``element`` note above).
         glob : bool, default=True
-            If True, rotate from ``element[0]`` to ``element[2]``; if False, start
-            from ``element[1]`` (used by :meth:`rotate_element`).
+            If True, rotate atoms in the range ``[element[0]:element[2])``.
+            If False, rotate the subrange ``[element[1]:element[2])`` (used by
+            :meth:`rotate_element`).
 
         Raises
         ------
         ValueError
             If :attr:`positions` is not initialized.
+
+        Notes
+        -----
+        - Distances are treated in Å. The axis direction is normalized; its
+        magnitude is ignored after unit conversion.
+        - Updates :attr:`positions` in place.
         """
+
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
 
@@ -632,17 +716,19 @@ class Complex:
             pos[j] -= shift_forward
         self.positions = pos[:]
 
-    def translate_global(self, element, shift) -> None:
+    def translate_global(self, element: Sequence[int], shift: Quantity) -> None:
         """
         Translate a global element by a displacement vector.
 
         Parameters
         ----------
-        element : list[int]
-            ``[start, bond, end_exclusive]`` in **global** indices. The ``bond``
-            entry is ignored for translation; only the range ``[start:end)`` is used.
-        shift : array-like or openmm.unit.Quantity
-            Displacement vector. Quantity units should be compatible with Å.
+        element : Sequence[int]
+            ``[start, bond, end_exclusive]`` in **global** indices.
+            The ``bond`` entry is ignored for translation; only ``[start:end)`` is used.
+        shift : openmm.unit.Quantity
+            Displacement vector **with length units** (Å). For example:
+            ``np.array([5.0, 0.0, 0.0]) * unit.angstrom``.
+            Unitless arrays are **not** accepted.
 
         Raises
         ------
@@ -659,7 +745,7 @@ class Complex:
             pos[j] += vec_shift
         self.positions = pos[:]
 
-    # ---------------------------------------------------------- Energetics/MD
+    # ------------------ Energetics/MD --------------------------------------
 
     def get_energy(self) -> tuple[float, list[mm.Vec3]]:
         """
@@ -714,9 +800,19 @@ class Complex:
         (float, list[mm.Vec3])
             Same as :meth:`get_energy`.
         """
+        # ensure the Context starts from our current coordinates
+        self.simulation.context.setPositions(self.positions)
+
+        # integrate
         self.simulation.step(number_of_steps)
-        self.positions = self.simulation.context.getPositions()
-        return self.get_energy()
+
+        # read back positions and energy from the Context
+        state = self.simulation.context.getState(
+            getPositions=True, getEnergy=True, groups=1
+        )
+        self.positions = state.getPositions()
+        free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
+        return free_E, self.positions
 
     def rigid_minimize(
         self, max_iterations: int = 100, max_step_iterations: int = 100
