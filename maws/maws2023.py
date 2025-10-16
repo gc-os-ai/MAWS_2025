@@ -17,7 +17,7 @@ import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.helpers import nostrom
-from maws.kernels import centerOfMass
+from maws.kernels import center_of_mass
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
 
@@ -168,7 +168,7 @@ def main():
         # Sampling spaces: cube of width 20 Å around ligand COM
         cube = space.Cube(
             20.0,
-            centerOfMass(np.asarray(nostrom(c.positions))),
+            center_of_mass(np.asarray(nostrom(c.positions))),
         )
         rotations = space.NAngles(N_ELEMENTS)
 
