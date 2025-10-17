@@ -8,10 +8,7 @@ version = "0.1.0.dev0"
 description = "MAWS: residue-based chemistry, complex preparation, and OpenMM routines for aptamer workflows"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [
-  {name = "Siddharth Siddharth"},
-  {name = "Contributors"}
-]
+# To add names of authors into this.
 
 # Runtime deps kept small; versions mirror your notes where sensible
 dependencies = [

@@ -1,319 +1,185 @@
 """
-complex.py
+maws.complex
+============
 
-Core data structures for MAWS:
-- Chain: a polymer chain built from residue templates with rotation utilities.
-- Complex: a collection of chains; responsible for building AMBER prmtop/inpcrd
-           via LEaP, caching builds, and running energies/MD via OpenMM.
+High-level container that composes one or more :class:`maws.chain.Chain` objects
+and materializes them into AMBER topology/coordinates (``.prmtop``/``.inpcrd``)
+using AmberTools LEaP, then into OpenMM objects for simulation.
 
-Notes
------
-- External executables are invoked via tools.run/find_exe (no 'conda run').
-- LEaP builds are cached in .maws_cache/ keyed by the exact input (FF sources,
-  residue init strings, and sequences). Subsequent identical builds reuse cached
-  prmtop/inpcrd files (no LEaP invocation).
+
+A :class:`~maws.complex.Complex` collects chains, builds AMBER artifacts with a
+deterministic content-addressed cache (under ``.maws_cache/``), and exposes
+OpenMM objects for energy queries and MD. Identical inputs never re-run LEaP.
+
+Key ideas
+---------
+- A single flat coordinate array (``positions``) holds atoms of **all** chains.
+  Each chain records a ``start`` offset and a ``length`` to index its slice.
+- Static chemistry (residue lengths, alias mapping, connectivity, torsions)
+  lives in :class:`maws.structure.Structure`. A :class:`~maws.chain.Chain`
+  references a :class:`~maws.structure.Structure` and translates any alias
+  sequence to a canonical sequence for LEaP.
+- Disk I/O is bounded: template generation in :func:`maws.prepare.make_lib`,
+  and build/load in :meth:`maws.complex.Complex.build`. Everything else is
+  in-memory.
+- External tools (e.g., ``tleap``, ``antechamber``, ``parmchk2``) are discovered
+  on ``PATH``.
+
+Dependencies
+------------
+AmberTools (for LEaP and optional parameterization) and OpenMM.
+
+See Also
+--------
+maws.chain.Chain
+maws.structure.Structure
+maws.prepare.make_lib
 """
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import openmm as mm
-from helpers import angle as ang
-from helpers import nostrom
 from openmm import app, unit
-from Prepare import makeLib
-from Structure import *
-from tools import find_exe, run
+from openmm.unit import Quantity
+
+from maws.chain import Chain
+from maws.helpers import angle as ang
+from maws.helpers import nostrom
+from maws.prepare import make_lib
+from maws.structure import Structure
+from maws.tools import find_exe, run
 
 
-## Represents a molecule chain, comprising multiple residues
-class Chain:
-    """
-    A polymer chain backed by a Structure template. Maintains sequence state,
-    residue start indices, and provides rotation/translation helpers that
-    delegate to the parent Complex.
-    """
-
-    def __init__(
-        self,
-        Complex,
-        Structure,
-        sequence: str | None = None,
-        start: int = 0,
-        ID: int = 0,
-    ):
-        self.id = ID
-        self.start = start
-        self.start_history = start
-        self.complex = Complex
-        self.residues_start: list[int] = []
-        self.length = 0
-        self.length_history = self.length
-        self.element = [self.start, self.start + 1, self.start + self.length]
-        self.structure = Structure
-        self.alias_sequence = ""
-        self.sequence = ""
-        self.sequence_array: list[str] = []
-        self.alias_sequence_array: list[str] = []
-        self.append_history: list[str] = []
-        self.prepend_history: list[str] = []
-
-        if sequence:
-            self.alias_sequence = sequence
-            self.sequence = self.structure.translate(self.alias_sequence)
-            self.sequence_array = self.sequence.split(" ")
-            self.alias_sequence_array = self.alias_sequence.split(" ")
-            self.length = sum(
-                map(self.structure.residue_length.__getitem__, self.sequence_array)
-            )
-            self.length_history = self.length
-            tally = 0
-            for residue in self.sequence_array:
-                self.residues_start.append(tally)
-                tally += self.structure.residue_length[residue]
-            self.element = [self.start, self.start + 1, self.start + self.length]
-
-    def update_chains(self):
-        """
-        Recompute this chain's length/starts and update downstream chains' starts.
-        Users should not call this directly; it's invoked by sequence mutators.
-        """
-        length = self.length
-        self.length = sum(
-            map(self.structure.residue_length.__getitem__, self.sequence_array)
-        )
-        self.residues_start = []
-        tally = 0
-        for residue in self.sequence_array:
-            self.residues_start.append(tally)
-            tally += self.structure.residue_length[residue]
-        self.element = [self.start, self.start + 1, self.start + self.length]
-        start = copy.deepcopy(self.start)
-
-        for chain in self.complex.chains:
-            chain.start_history = chain.start
-            if chain.start >= start:
-                chain.start += self.length - length
-                chain.start_history += 0
-                chain.element = [
-                    chain.start,
-                    chain.start + 1,
-                    chain.start + chain.length,
-                ]
-
-        self.start -= self.length - length
-        self.start_history -= 0
-        self.element = [self.start, self.start + 1, self.start + self.length]
-
-    def create_sequence(self, sequence: str):
-        """
-        Overwrite the chain's sequence.
-
-        After calling this, you must call Complex.build()/rebuild() to realize
-        the new topology/coordinates.
-        """
-        alias_sequence_array = sequence.split(" ")
-        sequence_array = self.structure.translate(sequence).split(" ")
-        for letter in sequence_array:
-            if letter not in self.structure.residue_names:
-                raise ValueError("Residue not defined! CANNOT create sequence!")
-        self.alias_sequence = sequence
-        self.sequence = self.structure.translate(self.alias_sequence)
-        self.alias_sequence_array = alias_sequence_array
-        self.sequence_array = sequence_array
-        self.update_chains()
-        self.start_history = self.start
-        self.length_history = self.length
-        self.sequence_array_history = self.sequence_array
-
-    def append_sequence(self, sequence: str):
-        """Append a residue (alias) to the right side and track history for rebuild."""
-        start_history = self.start
-        length = self.length
-        seq_ar_length = len(self.sequence_array)
-        self.create_sequence(" ".join(self.alias_sequence_array[:] + [sequence]))
-        self.length_history = length
-        self.start_history = start_history
-        self.prepend_history = []
-        self.append_history = self.sequence_array[seq_ar_length:]
-
-    def prepend_sequence(self, sequence: str):
-        """Prepend a residue (alias) to the left side and track history for rebuild."""
-        length = self.length
-        seq_ar_length = len(self.sequence_array)
-        self.create_sequence(" ".join([sequence] + self.alias_sequence_array[:]))
-        self.length_history = length
-        self.start_history = self.start + self.length - length
-        self.prepend_history = self.sequence_array[
-            : len(self.sequence_array) - seq_ar_length
-        ]
-
-    def rotate_element(self, element, angle: float, reverse: bool = False):
-        """
-        Rotate the specified element [start, bond, end] by angle (radians).
-        If reverse=True and end is None, rotate the complement instead.
-        """
-        revised_element = element[:]
-        rev = reverse
-        if rev:
-            if revised_element[2] is None:
-                revised_element[2] = 0
-            else:
-                revised_element[2] = revised_element[1]
-        rev = False
-
-        if len(revised_element) == 3 and revised_element[2] is not None:
-            revised_element = [index + self.start for index in revised_element]
-            self.complex.rotate_element(revised_element, angle, reverse=rev)
-        elif len(revised_element) == 3 and revised_element[2] is None:
-            revised_element = [
-                revised_element[0] + self.start,
-                revised_element[1] + self.start,
-                self.length + self.start,
-            ]
-            self.complex.rotate_element(revised_element, angle, reverse=rev)
-        else:
-            raise ValueError("Rotable element contains too many or too few components!")
-
-    def rotate_in_residue(
-        self,
-        residue_index: int,
-        residue_element_index: int,
-        angle: float,
-        reverse: bool = False,
-    ):
-        """
-        Rotate one of the pre-defined rotating elements of a residue in this chain.
-
-        Parameters
-        ----------
-        residue_index : int
-            Index into the chain's residue list; negative indices count from the end.
-        residue_element_index : int
-            Index into Structure.rotating_elements[residue].
-        angle : float
-            Rotation angle in radians.
-        reverse : bool
-            If True and the element has end=None, rotate the complement.
-        """
-        rev = reverse
-        revised_residue_index = residue_index
-        if residue_index < 0:
-            revised_residue_index += len(self.sequence_array)
-        element = self.structure.rotating_elements[
-            self.sequence_array[revised_residue_index]
-        ][residue_element_index]
-        # normalize possibly negative element indices
-        for i in range(len(element)):
-            if element[i] and element[i] < 0:
-                element[i] += self.structure.residue_length[
-                    self.sequence_array[revised_residue_index]
-                ]
-
-            if element[2] is None:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    None,
-                ]
-            elif element[2] == 0:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    element[2],
-                ]
-            else:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    element[2] + self.residues_start[revised_residue_index],
-                ]
-                rev = False
-            self.rotate_element(revised_element, angle, reverse=rev)
-
-    # deprecated helpers kept for compatibility
-    def rotate_historic_element(self, historic_element, angle: float):
-        if historic_element[2]:
-            self.rotate_element(
-                [
-                    historic_element[0] + self.start_history - self.start,
-                    historic_element[1] + self.start_history - self.start,
-                    historic_element[2] + self.start_history - self.start,
-                ],
-                angle,
-            )
-        else:
-            self.rotate_element(
-                [
-                    historic_element[0] + self.start_history - self.start,
-                    historic_element[0] + self.start_history - self.start,
-                    None,
-                ],
-                angle,
-            )
-
-    def rotate_in_historic_residue(
-        self, historic_index: int, element_index: int, angle: float
-    ):
-        offset = len(self.prepend_history)
-        self.rotate_in_residue(historic_index + offset, element_index, angle)
-
-    def rotate_global(self, axis, angle: float):
-        """Rotate the entire chain around the given axis by angle (radians)."""
-        self.complex.rotate_global(self.element, axis, angle)
-
-    def translate_global(self, shift):
-        """Translate the entire chain by the given 3-vector (OpenMM Quantity)."""
-        self.complex.translate_global(self.element, shift)
-
-
-## Represents a complex containing multiple molecule chains.
 class Complex:
     """
-    Collection of Chain objects that can be built via LEaP into AMBER prmtop/inpcrd
-    and simulated/queried via OpenMM.
+    Container for one or more :class:`~maws.chain.Chain` objects that can be
+    materialized with AmberTools LEaP and simulated or queried with OpenMM.
 
-    Parameters
+    Extended Summary
+    ----------------
+    A :class:`Complex` stores the chain list (topology composition), the current
+    simulation state (coordinates and OpenMM objects), and a LEaP preamble
+    (``build_string``). Builds are content-addressed and cached so identical
+    inputs reuse existing AMBER artifacts.
+
+    Design notes
+    ------------
+    Composition vs. builder
+      - ``Complex`` **owns**:
+        * the collection of :class:`~maws.chain.Chain` objects (topology),
+        * the simulation state (``positions``, ``topology``, ``system``,
+          ``integrator``, ``simulation``),
+        * the LEaP preamble (``build_string``) and the cache.
+      - Each :class:`Chain` **references** a :class:`maws.structure.Structure`,
+        which provides residue lengths, alias mapping, connectivity, and torsion
+        rules. A chain stores both the alias sequence and the **canonical**
+        LEaP sequence via ``Structure.translate(...)``.
+      - :meth:`Complex.build` acts as a *builder/materializer*: it turns the spec
+        (chains + structures + preamble) into AMBER artifacts and OpenMM objects.
+
+    File I/O boundaries
+      - ``add_chain_from_pdb(...)`` calls :func:`maws.prepare.make_lib`, which
+        works in a temporary directory and moves artifacts **next to the input**:
+        ``<name>.lib`` and, when parameterization is needed, ``<name>.frcmod``.
+      - :meth:`build(...)``:
+          1) writes ``<target>/<file>.in`` (LEaP input),
+          2) runs ``tleap`` (found via :func:`maws.tools.find_exe`),
+          3) moves the produced ``.prmtop``/``.inpcrd`` into
+             ``.maws_cache/<sha1>.{prmtop,inpcrd}``,
+          4) loads those cached files into OpenMM.
+        **No other methods write to disk**; geometry and MD are in-memory.
+
+    Cache key
+      The deterministic SHA1 covers:
+        - normalized ``build_string`` (whitespace collapsed),
+        - each chain's ``structure.init_string`` (whitespace removed),
+        - each chain's **canonical** sequence string (from ``Structure.translate``).
+      Identical inputs reuse the same cached build.
+
+    Attributes
     ----------
-    force_field_aptamer : str
-        LEaP 'source' line for the aptamer/nucleic acid force field.
-    force_field_ligand : str
-        LEaP 'source' line for the ligand/protein/small-molecule force field.
-    conda_env : str
-        Ignored (kept for backward compatibility).
+    build_string : str
+        LEaP preamble (typically a sequence of ``source ...`` lines).
+    prmtop : openmm.app.AmberPrmtopFile | None
+        Loaded AMBER topology after :meth:`build`.
+    inpcrd : openmm.app.AmberInpcrdFile | None
+        Loaded AMBER coordinates after :meth:`build`.
+    positions : list[openmm.Vec3] | None
+        Flat coordinate array over **all** chains, populated by :meth:`build`
+        or updated by geometry/MD methods. Length equals total atom count.
+    topology : openmm.app.Topology | None
+        OpenMM topology built from the AMBER files.
+    chains : list[:class:`maws.chain.Chain`]
+        Chains in insertion order.
+    system : openmm.System | None
+        OpenMM system created from ``prmtop``.
+    integrator : openmm.Integrator | None
+        OpenMM integrator (default: Langevin).
+    simulation : openmm.app.Simulation | None
+        OpenMM Simulation object initialized on :meth:`build`.
+
+    Notes
+    -----
+    - Distances are Å and angles are radians unless stated otherwise.
+    - Cache directory: ``.maws_cache/`` with files ``<sha1>.prmtop`` and
+      ``<sha1>.inpcrd``.
     """
 
     def __init__(
         self,
         force_field_aptamer: str = "leaprc.RNA.OL3",
         force_field_ligand: str = "leaprc.protein.ff19SB",
-        conda_env: str = "maws_p3",
     ):
+        """
+        Parameters
+        ----------
+        force_field_aptamer : str, default="leaprc.RNA.OL3"
+            LEaP ``source`` line for the nucleic-acid FF (e.g., RNA.OL3/DNA.OL21).
+        force_field_ligand : str, default="leaprc.protein.ff19SB"
+            LEaP ``source`` line for the ligand/protein/small-molecule FF.
+        """
         self.build_string = f"""
                             source {force_field_aptamer}
                             source {force_field_ligand}
                             """
-        self.prmtop = None
-        self.inpcrd = None
-        self.positions = None
-        self.topology = None
+        self.prmtop: app.AmberPrmtopFile | None = None
+        self.inpcrd: app.AmberInpcrdFile | None = None
+        self.positions: list[mm.Vec3] | None = None
+        self.topology: app.Topology | None = None
         self.chains: list[Chain] = []
-        self.system = None
-        self.integrator = None
-        self.simulation = None
-        self.cenv = conda_env  # legacy, unused
+        self.system: mm.System | None = None
+        self.integrator: mm.Integrator | None = None
+        self.simulation: app.Simulation | None = None
 
-    def add_chain(self, sequence: str, structure):
+    # Chains-------------------------------------
+
+    def add_chain(self, sequence: str, structure: Structure) -> None:
         """
-        Append a Chain with the given sequence and Structure template.
+        Append a :class:`Chain` with the given sequence and :class:`Structure`.
+
+        Parameters
+        ----------
+        sequence : str
+            **Alias** sequence (space-separated). May be ``''`` for an empty chain
+            that will be populated later via :meth:`Chain.create_sequence`.
+        structure : Structure
+            Template bank providing residue metadata and LEaP init strings.
+
+        Notes
+        -----
+        The new chain's ``start`` is set to the current total atom count
+        (sum of existing chains' lengths). The chain's internal bookkeeping
+        (lengths, offsets) is computed immediately if a non-empty sequence
+        is provided. Topology/coordinates are only created upon :meth:`build`.
         """
         if self.chains:
-            start = sum([chain.length for chain in self.chains])
+            start = sum(chain.length for chain in self.chains)
             chainID = len(self.chains)
         else:
             start = 0
@@ -322,7 +188,7 @@ class Complex:
             Chain(self, structure, sequence=sequence, start=start, ID=chainID)
         )
 
-    def add_chain_from_PDB(
+    def add_chain_from_pdb(
         self,
         pdb_path: str,
         force_field_aptamer: str,
@@ -330,13 +196,38 @@ class Complex:
         structure=None,
         pdb_name: str = "LIG",
         parameterized: bool = False,
-    ):
+    ) -> None:
         """
-        Create a one-residue Structure from a PDB (or pre-parameterized building block),
-        generate its .lib/.frcmod via makeLib, and add as a Chain.
+        Create a single-residue :class:`Structure` from a PDB (or from
+        a pre-parameterized building block), then add it as a :class:`Chain`.
+
+        This is typically used for adding the ligand as a one-residue chain.
+
+        Parameters
+        ----------
+        pdb_path : str
+            Path to the input PDB (or a building block). If ``parameterized=True``,
+            it should already carry the coordinates you want LEaP to use.
+        force_field_aptamer : str
+            LEaP ``source`` line for the aptamer FF (e.g., RNA.OL3/DNA.OL21).
+        force_field_ligand : str
+            LEaP ``source`` line for the ligand/protein FF (e.g., ff19SB or gaff2).
+        structure : None
+            Unused; kept for signature compatibility.
+        pdb_name : str, default="LIG"
+            Name for the residue/template generated in LEaP.
+        parameterized : bool, default=False
+            If True, skip antechamber/parmchk2 and rely on ``loadpdb`` instead.
+
+        Side Effects
+        ------------
+        Writes ``<pdb_name>.lib`` (and possibly ``.frcmod``) next to the input file.
+
+        See Also
+        --------
+        maws.prepare.make_lib : Implementation details of the wrapper.
         """
-        # makeLib no longer accepts conda_env; tools must be on PATH
-        length = makeLib(
+        length = make_lib(
             pdb_path,
             pdb_name,
             force_field_aptamer=force_field_aptamer,
@@ -347,17 +238,27 @@ class Complex:
         structure = Structure([pdb_name], residue_length=[length], residue_path=path)
         self.add_chain(pdb_name, structure)
 
-    # ---- LEaP build + cache -------------------------------------------------
+    # LEaP + cache
 
     def _build_cache_key(self) -> str:
         """
-        Compute a deterministic cache key from the build inputs:
-        - current build preamble (FF sources),
-        - each chain's residue init_string (loadoff/loadamberparams),
-        - sequences of all chains.
+        Compute a deterministic cache key from all build-relevant inputs.
+
+        Returns
+        -------
+        str
+            SHA1 hex digest over:
+              - normalized ``build_string`` (whitespace collapsed),
+              - each chain's LEaP ``init_string`` with whitespace stripped,
+              - each chain's canonical sequence string.
+
+        Notes
+        -----
+        The cache is stored under ``.maws_cache/`` with filenames
+        ``<key>.prmtop`` and ``<key>.inpcrd``.
         """
         payload = {
-            "build": " ".join(self.build_string.split()),  # normalize whitespace
+            "build": " ".join(self.build_string.split()),
             "inits": [
                 ("".join(ch.structure.init_string.split())) for ch in self.chains
             ],
@@ -365,26 +266,49 @@ class Complex:
         }
         return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
-    def build(self, target_path: str = "", file_name: str = "out"):
+    def build(self, target_path: str = "", file_name: str = "out") -> None:
         """
-        Materialize the current set of chains into AMBER prmtop/inpcrd using LEaP.
-
-        - If an identical build was done before, reuses cached files from .maws_cache/.
-        - Otherwise writes a temporary LEaP input and runs `tleap -f ...`.
+        Materialize current chains into AMBER ``.prmtop``/``.inpcrd`` using LEaP.
+        Uses a content-addressed cache to avoid repeated LEaP runs.
 
         Parameters
         ----------
-        target_path : str
-            Path prefix where LEaP would write outputs (kept for compatibility).
-            Cache files are stored under .maws_cache regardless.
-        file_name : str
-            Base name for output files (prmtop/inpcrd). Ignored by cache when reusing.
+        target_path : str, default=""
+            Path prefix where LEaP would write outputs **if** the cache is missed.
+            Cache files are always under ``.maws_cache/``.
+        file_name : str, default="out"
+            Base name for outputs when writing (ignored during cache reuse).
+
+        Raises
+        ------
+        ValueError
+            If there are no chains to build.
+        RuntimeError
+            If LEaP does not produce the expected outputs.
+
+        Notes
+        -----
+        Build steps:
+          1. Construct the LEaP script:
+             - prepend ``build_string``,
+             - append each chain's ``structure.init_string``,
+             - for each chain with a non-empty canonical ``sequence``, emit
+               ``CHAIN{i} = sequence { ... }``,
+             - ``UNION = combine { CHAIN0 CHAIN1 ... }``,
+             - ``saveamberparm UNION <out>.prmtop <out>.inpcrd``.
+          2. Compute cache key via :meth:`_build_cache_key`.
+          3. If cache miss:
+             - write the input script to ``<target_path>/<file_name>.in``,
+             - run ``tleap -f`` on it,
+             - move results into ``.maws_cache/`` under the cache key.
+          4. Load cached results into OpenMM and initialize ``system``,
+             ``integrator``, and ``simulation``.
         """
         if not self.chains:
             raise ValueError("Empty Complex! CANNOT build!")
 
         # Assemble LEaP input
-        build_string_base = self.build_string
+        build_string_base = self.build_string  # keep exact original (whitespace)
         leap_str = [self.build_string]
         for chain in self.chains:
             leap_str.append(chain.structure.init_string)
@@ -401,32 +325,32 @@ class Complex:
         leap_str.append("quit")
         leap_input = "\n".join(leap_str)
 
-        # Caching
+        # Cache lookup
         cache_dir = Path(".maws_cache")
         cache_dir.mkdir(exist_ok=True)
         key = self._build_cache_key()
         cache_prm = cache_dir / f"{key}.prmtop"
         cache_crd = cache_dir / f"{key}.inpcrd"
 
-        # Try cache
         if not (cache_prm.exists() and cache_crd.exists()):
-            # Write LEaP input near the intended output for easier debugging
+            # Write input near intended outputs for debugging
             in_file = Path(f"{target_path}{file_name}.in")
             in_file.write_text(leap_input)
-            # Invoke tleap directly (no conda run)
+            # Run tleap directly (no conda run)
             run([find_exe("tleap"), "-f", str(in_file)])
-            # Move results into cache
+
             produced_prm = Path(f"{out_prefix}.prmtop")
             produced_crd = Path(f"{out_prefix}.inpcrd")
             if not (produced_prm.exists() and produced_crd.exists()):
                 raise RuntimeError(
                     "LEaP did not produce expected .prmtop/.inpcrd outputs."
                 )
+
             produced_prm.replace(cache_prm)
             produced_crd.replace(cache_crd)
 
-        # Load from cache
-        self.build_string = build_string_base  # restore original
+        # Load cached (or newly produced) artifacts
+        self.build_string = build_string_base  # restore verbatim preamble
         self.prmtop = app.AmberPrmtopFile(str(cache_prm))
         self.inpcrd = app.AmberInpcrdFile(str(cache_crd))
         self.topology = self.prmtop.topology
@@ -442,19 +366,53 @@ class Complex:
         )
         self.simulation = app.Simulation(self.topology, self.system, self.integrator)
 
-    # ---- Geometry utilities -------------------------------------------------
+    # ---------------------------------  Geometry ops---------------
 
     def rebuild(
-        self, target_path: str = "", file_name: str = "out", exclusion: list = []
-    ):
+        self,
+        target_path: str = "",
+        file_name: str = "out",
+        exclusion: list[Chain] | None = None,
+    ) -> None:
         """
-        Rebuild prmtop/inpcrd/topology/positions after sequence changes, attempting to
-        preserve coordinates of atoms outside the modified regions.
+        Rebuild AMBER artifacts after sequence edits, attempting to preserve
+        coordinates for atoms **outside** modified regions.
+
+        Parameters
+        ----------
+        target_path : str, default=""
+            Passed through to :meth:`build`. Only used when the cache misses.
+        file_name : str, default="out"
+            Passed through to :meth:`build` when writing.
+        exclusion : list, default=[]
+            Optional list of chains to *exclude* from coordinate mapping. Their
+            coordinates will come directly from the fresh build.
+
+        Notes
+        -----
+        The algorithm:
+          - Save old coordinates (``old_positions``).
+          - :meth:`build` the updated topology/coordinates (cached).
+          - For each chain:
+            * If residues were **prepended**:
+              align the leading segment using the old/new connection vectors,
+              rotate into place around the new bond, fix the bond length, and
+              splice back into :attr:`positions`.
+            * If residues were **appended**:
+              symmetric operation on the trailing segment.
+            * If neither:
+              splice the chain's *whole* old block back into the new coordinate
+              array (preserving internal coordinates).
+
+        This keeps most atoms unmoved and only adjusts the junctions introduced
+        by prepend/append operations (driven by ``chain.prepend_history`` or
+        ``chain.append_history``).
         """
+        exclusion = [] if exclusion is None else list(exclusion)
         old_positions = self.positions[:]
         self.build(target_path=target_path, file_name=file_name)
 
-        for index, chain in enumerate(self.chains):
+        for _index, chain in enumerate(self.chains):
             if chain in exclusion:
                 continue
 
@@ -466,8 +424,8 @@ class Complex:
                 chain.start_history + chain.length_history : chain.start + chain.length
             ]
 
+            # ---- handle prepended atoms ----
             if len(pre_positions) != 0 and chain.prepend_history:
-                # ---- fix prepended atoms ----
                 pre_positions = self.positions[chain.start : chain.start_history + 1]
                 pre_vector = (
                     self.positions[
@@ -495,8 +453,8 @@ class Complex:
                     mm.Vec3(0, 0, 0) * unit.angstroms
                     - pos[-1 + chain.structure.connect[chain.prepend_history[-1]][1][0]]
                 )
-                s = np.math.sin(phi_2)
-                c = np.math.cos(phi_2)
+                s = np.sin(phi_2)
+                c = np.cos(phi_2)
                 rot = np.array(
                     [
                         [
@@ -516,11 +474,9 @@ class Complex:
                         ],
                     ]
                 )
-
                 for j in range(0, len(pos)):
                     pos[j] += shift_forward
 
-                # bond-length correction for the new connection
                 shift_back = chain_positions[
                     chain.structure.connect[
                         chain.sequence_array[len(chain.prepend_history)]
@@ -532,7 +488,6 @@ class Complex:
                     / np.linalg.norm(np.asarray(nostrom(old_pre_vector)))
                     - old_pre_vector
                 )
-
                 for j in range(0, len(pos)):
                     roted = np.dot(np.array(pos[j].value_in_unit(unit.angstrom)), rot)
                     pos[j] = mm.Vec3(roted[0], roted[1], roted[2]) * unit.angstrom
@@ -540,7 +495,6 @@ class Complex:
 
                 pre_positions = pos[:]
                 chain_positions[0] += pre_bond_shift
-
                 self.positions = (
                     self.positions[: chain.start]
                     + pre_positions[:]
@@ -548,8 +502,8 @@ class Complex:
                     + self.positions[chain.start + chain.length :]
                 )
 
+            # ---- handle appended atoms ----
             if len(post_positions) != 0 and chain.append_history:
-                # ---- fix appended atoms ----
                 post_positions = self.positions[
                     chain.start_history + chain.length_history - 1 : chain.start_history
                     + chain.length
@@ -579,8 +533,8 @@ class Complex:
                     mm.Vec3(0, 0, 0) * unit.angstroms
                     - pos[chain.structure.connect[chain.append_history[0]][0][0]]
                 )
-                s = np.math.sin(phi_2)
-                c = np.math.cos(phi_2)
+                s = np.sin(phi_2)
+                c = np.cos(phi_2)
                 rot = np.array(
                     [
                         [
@@ -600,7 +554,6 @@ class Complex:
                         ],
                     ]
                 )
-
                 for j in range(0, len(pos)):
                     pos[j] += shift_forward
 
@@ -615,7 +568,6 @@ class Complex:
                         chain.sequence_array[-len(chain.append_history)]
                     ][0][1]
                 ]
-
                 for pos_idx, pos_elem in enumerate(pos):
                     roted = np.dot(np.array(pos_elem.value_in_unit(unit.angstrom)), rot)
                     pos[pos_idx] = mm.Vec3(roted[0], roted[1], roted[2]) * unit.angstrom
@@ -630,6 +582,7 @@ class Complex:
                     + self.positions[chain.start + chain.length :]
                 )
 
+            # ---- no boundary edits: reuse old internal coordinates ----
             if not (chain.append_history or chain.prepend_history):
                 self.positions = (
                     self.positions[: chain.start]
@@ -639,8 +592,30 @@ class Complex:
                     + self.positions[chain.start + chain.length :]
                 )
 
-    def rotate_element(self, element, angle: float, reverse: bool = False):
-        """Rotate a contiguous element [start, bond, end] by angle (radians)."""
+    def rotate_element(
+        self, element: Sequence[int], angle: float, reverse: bool = False
+    ) -> None:
+        """
+        Rotate a contiguous **global** element by ``angle`` radians.
+
+        Parameters
+        ----------
+        element : Sequence[int]
+            ``[start, bond, end_exclusive]`` in **global** atom indices.
+            The rotation axis is computed internally as
+            ``positions[bond] - positions[start]`` (this is a unit-bearing vector).
+        angle : float
+            Rotation angle in **radians**.
+        reverse : bool, default=False
+            Passed through to :meth:`rotate_global` to rotate the complementary
+            segment when applicable.
+
+        Raises
+        ------
+        ValueError
+            If :attr:`positions` is not initialized.
+        """
+
         revised_element = element[:]
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
@@ -653,11 +628,55 @@ class Complex:
         self.rotate_global(revised_element, vec_a, angle, reverse=reverse, glob=False)
 
     def rotate_global(
-        self, element, axis, angle: float, reverse: bool = False, glob: bool = True
-    ):
-        """Rotate either whole chain (glob=True) or sub-element (glob=False) around axis by angle."""
+        self,
+        element: Sequence[int],
+        axis: Quantity,  # must have length units (Å)
+        angle: float,
+        reverse: bool = False,
+        glob: bool = True,
+    ) -> None:
+        """
+        Core rotation kernel (Rodrigues-style) for either the whole chain
+        (``glob=True``) or a sub-element (``glob=False``).
+
+        Parameters
+        ----------
+        element : Sequence[int]
+            ``[start, bond, end_exclusive]`` in **global** atom indices.
+            If ``reverse`` is True, the pivot used for the pre/post shifts is
+            taken from ``element[2]`` (end) instead of the start/bond pair.
+        axis : openmm.unit.Quantity
+            Rotation axis as a 3-vector **with length units** (Å).
+            Examples:
+            ``np.array([0, 1, 0]) * unit.angstrom``,
+            ``mm.Vec3(0, 1, 0) * unit.angstrom``.
+            A raw NumPy array **without units is not accepted**—pass through
+            :func:`maws.helpers.angstrom` if you need to attach units.
+        angle : float
+            Rotation angle in **radians**.
+        reverse : bool, default=False
+            If True, rotate the **complement** of the selected range relative to
+            the pivot (see ``element`` note above).
+        glob : bool, default=True
+            If True, rotate atoms in the range ``[element[0]:element[2])``.
+            If False, rotate the subrange ``[element[1]:element[2])`` (used by
+            :meth:`rotate_element`).
+
+        Raises
+        ------
+        ValueError
+            If :attr:`positions` is not initialized.
+
+        Notes
+        -----
+        - Distances are treated in Å. The axis direction is normalized; its
+        magnitude is ignored after unit conversion.
+        - Updates :attr:`positions` in place.
+        """
+
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
+
         x, y, z = np.asarray(nostrom(axis)) / (
             np.linalg.norm(np.asarray(nostrom(axis)))
         )
@@ -668,8 +687,8 @@ class Complex:
             mm.Vec3(0, 0, 0) * unit.angstroms
             - pos[element[2] if reverse else element[starting_index]]
         )
-        s = np.math.sin(phi_2)
-        c = np.math.cos(phi_2)
+        s = np.sin(phi_2)
+        c = np.cos(phi_2)
         rot = np.array(
             [
                 [
@@ -689,18 +708,33 @@ class Complex:
                 ],
             ]
         )
-
         for j in range(element[starting_index], element[2]):
             pos[j] += shift_forward
         for j in range(element[starting_index], element[2]):
             roted = np.dot(np.array(pos[j].value_in_unit(unit.angstrom)), rot)
             pos[j] = mm.Vec3(roted[0], roted[1], roted[2]) * unit.angstrom
             pos[j] -= shift_forward
-
         self.positions = pos[:]
 
-    def translate_global(self, element, shift):
-        """Translate either whole chain (glob) or a sub-element by the given shift (OpenMM Quantity)."""
+    def translate_global(self, element: Sequence[int], shift: Quantity) -> None:
+        """
+        Translate a global element by a displacement vector.
+
+        Parameters
+        ----------
+        element : Sequence[int]
+            ``[start, bond, end_exclusive]`` in **global** indices.
+            The ``bond`` entry is ignored for translation; only ``[start:end)`` is used.
+        shift : openmm.unit.Quantity
+            Displacement vector **with length units** (Å). For example:
+            ``np.array([5.0, 0.0, 0.0]) * unit.angstrom``.
+            Unitless arrays are **not** accepted.
+
+        Raises
+        ------
+        ValueError
+            If :attr:`positions` is not initialized.
+        """
         if not self.positions:
             raise ValueError(
                 "This Complex contains no positions! You CANNOT translate!"
@@ -711,10 +745,17 @@ class Complex:
             pos[j] += vec_shift
         self.positions = pos[:]
 
-    # ---- Energy and dynamics -----------------------------------------------
+    # ------------------ Energetics/MD --------------------------------------
 
-    def get_energy(self):
-        """Return (potential_energy_kJ_per_mol, positions)."""
+    def get_energy(self) -> tuple[float, list[mm.Vec3]]:
+        """
+        Compute potential energy for the current coordinates.
+
+        Returns
+        -------
+        (float, list[mm.Vec3])
+            Tuple ``(potential_energy_kJ_per_mol, positions)``.
+        """
         self.simulation.context.setPositions(self.positions)
         state = self.simulation.context.getState(
             getPositions=True, getEnergy=True, groups=1
@@ -722,8 +763,20 @@ class Complex:
         free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         return free_E, self.positions
 
-    def minimize(self, max_iterations: int = 100):
-        """Local energy minimization (OpenMM). Returns final potential energy (kJ/mol)."""
+    def minimize(self, max_iterations: int = 100) -> float:
+        """
+        Local energy minimization.
+
+        Parameters
+        ----------
+        max_iterations : int, default=100
+            Maximum number of minimization iterations.
+
+        Returns
+        -------
+        float
+            Final potential energy (kJ/mol).
+        """
         self.simulation.context.setPositions(self.positions)
         self.simulation.minimizeEnergy(maxIterations=max_iterations)
         state = self.simulation.context.getState(
@@ -733,43 +786,89 @@ class Complex:
         free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         return free_E
 
-    def step(self, number_of_steps: int):
-        """Run MD steps and return (potential_energy_kJ_per_mol, positions)."""
-        self.simulation.step(number_of_steps)
-        self.positions = self.simulation.context.getPositions()
-        return self.get_energy()
-
-    def rigid_minimize(self, max_iterations: int = 100, max_step_iterations: int = 100):
+    def step(self, number_of_steps: int) -> tuple[float, list[mm.Vec3]]:
         """
-        Experimental: random rotations on residues followed by local minimization
-        to explore lower-energy conformations.
+        Advance MD by a number of steps.
+
+        Parameters
+        ----------
+        number_of_steps : int
+            Number of integrator steps to execute.
+
+        Returns
+        -------
+        (float, list[mm.Vec3])
+            Same as :meth:`get_energy`.
+        """
+        # ensure the Context starts from our current coordinates
+        self.simulation.context.setPositions(self.positions)
+
+        # integrate
+        self.simulation.step(number_of_steps)
+
+        # read back positions and energy from the Context
+        state = self.simulation.context.getState(
+            getPositions=True, getEnergy=True, groups=1
+        )
+        self.positions = state.getPositions()
+        free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
+        return free_E, self.positions
+
+    def rigid_minimize(
+        self, max_iterations: int = 100, max_step_iterations: int = 100
+    ) -> None:
+        """
+        Experimental search: random residue torsions followed by local minimization.
+
+        Parameters
+        ----------
+        max_iterations : int, default=100
+            Outer loop iterations over residues.
+        max_step_iterations : int, default=100
+            Random torsion proposals per residue before accepting an improvement.
+
+        Notes
+        -----
+        For each residue, propose random torsions; if a proposal improves the
+        energy, keep it, otherwise revert the coordinates. This is a greedy
+        heuristic and not guaranteed to converge to a global minimum.
         """
         energy = None
-        for i in range(max_iterations):
+        for _i in range(max_iterations):
             for chain in self.chains:
                 for idx, residue in enumerate(chain.sequence_array):
-                    for j in range(max_step_iterations):
+                    for _j in range(max_step_iterations):
                         positions = self.positions[:]
+                        rots = chain.structure.rotating_elements[residue]
+                        if rots == [None]:  # skip residues with no torsions
+                            continue
+                        n_rots = len(rots)
+
                         chain.rotate_in_residue(
                             idx,
-                            np.random.choice(
-                                [
-                                    elem
-                                    for elem in range(
-                                        len(chain.structure.rotating_elements[residue])
-                                    )
-                                ]
-                            ),
-                            np.random.uniform(-np.math.pi, np.math.pi),
+                            int(
+                                np.random.randint(n_rots)
+                            ),  # or: np.random.choice(n_rots)
+                            np.random.uniform(-np.pi, np.pi),
                         )
+
                         free_E = self.get_energy()[0]
                         if free_E < energy or energy is None:
                             energy = free_E
                             self.positions = positions[:]
 
-    def pert_min(self, size: float = 1e-1, iterations: int = 50):
-        """Chain-wriggling heuristic: small random coordinate kicks followed by minimization."""
-        for repeat in range(iterations):
+    def pert_min(self, size: float = 1e-1, iterations: int = 50) -> None:
+        """
+        Chain-wriggling heuristic: apply small random kicks, then minimize.
+
+        Parameters
+        ----------
+        size : float, default=1e-1
+            Uniform kick magnitude in Å for each coordinate component.
+        iterations : int, default=50
+            Number of (kick → minimize) cycles to perform.
+        """
+        for _repeat in range(iterations):
             for i in range(len(self.positions)):
                 self.positions[i] += np.random.uniform(-size, size, 3) * unit.angstrom
             self.minimize()
