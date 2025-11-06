@@ -18,12 +18,59 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.helpers import nostrom
 from maws.kernels import center_of_mass
+from maws.pdb_cleaner import clean_one_file
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
 
-VERSION = "2.1"
-RELEASE_DATE = "2017"
+# VERSION = "2.1" # Original Authoras To-do: cite in readme
+# RELEASE_DATE = "2017" # Original Authors To-do: cite in readme
+VERSION = "2.2"  # Siddharth
+RELEASE_DATE = "2025"  # Siddharth
 METHOD = "Kullback-Leibler"
+
+
+def _resolve_pdb_path(
+    pdb_path: str,
+    molecule_type: str,
+    *,
+    clean_pdb: bool,
+    keep_chains: str,
+    remove_h: bool,
+    drop_hetatm: bool,
+    logger=None,
+) -> tuple[str, str]:
+    """
+    Decide the PDB path to use (possibly cleaned). Returns (final_path, original_path).
+
+    - Cleans only if `clean_pdb=True` AND `molecule_type == "protein"`.
+    - Logs to `logger(msg: str)` if provided (same file handle as your run log).
+    """
+    original = pdb_path
+    if not clean_pdb:
+        return pdb_path, original
+
+    if molecule_type != "protein":
+        if logger:
+            logger(
+                "[WARN] --clean-pdb is intended for protein inputs;"
+                "skipping for non-protein types.\n"
+            )
+        return pdb_path, original
+
+    try:
+        new_path = clean_one_file(
+            pdb_path,
+            keep=keep_chains,  # "all" | "one" | "A,B"
+            remove_h=remove_h,  # True/False
+            drop_hetatm=drop_hetatm,  # True/False
+        )
+        if logger:
+            logger(f"[CLEAN] Cleaned PDB written to: {new_path}\n")
+        return new_path, original
+    except Exception as e:
+        if logger:
+            logger(f"[WARN] PDB cleaning failed; using original file. Reason: {e}\n")
+        return pdb_path, original
 
 
 def parse_args():
@@ -78,6 +125,25 @@ def parse_args():
         default=5000,
         help="Number of samples in all subsequent MAWS steps.",
     )
+    parser.add_argument(
+        "--clean-pdb",
+        action="store_true",
+        help="Clean the input PDB before LEaP (use for protein-type inputs).",
+    )
+    parser.add_argument(
+        "--keep-chains",
+        type=str,
+        default="all",
+        help='Chain policy for cleaner: "all", "one", or comma list like "A,B".',
+    )
+    parser.add_argument(
+        "--remove-h", action="store_true", help="Cleaner: remove hydrogens."
+    )
+    parser.add_argument(
+        "--drop-hetatm",
+        action="store_true",
+        help="Cleaner: drop all HETATM records (NOT recommended for small molecules).",
+    )
     return parser.parse_args()
 
 
@@ -108,7 +174,19 @@ def main():
         output.write(f"Type of aptamer: {APTAMER_TYPE}\n")
         output.write(f"Type of ligand molecule: {MOLECULE_TYPE}\n")
         output.write(f"Job: {JOB_NAME}\n")
-        output.write(f"Input file: {PDB_PATH}\n")
+        # Resolve (and optionally clean) the PDB before any LEaP calls
+        PDB_PATH, ORIGINAL_PDB_PATH = _resolve_pdb_path(
+            PDB_PATH,
+            MOLECULE_TYPE,
+            clean_pdb=args.clean_pdb,
+            keep_chains=args.keep_chains,
+            remove_h=args.remove_h,
+            drop_hetatm=args.drop_hetatm,
+            logger=output.write,
+        )
+        output.write(f"Input file (original): {ORIGINAL_PDB_PATH}\n")
+        if PDB_PATH != ORIGINAL_PDB_PATH:
+            output.write(f"Input file (cleaned):  {PDB_PATH}\n")
         output.write(f"Sample number in initial step: {FIRST_CHUNK_SIZE}\n")
         output.write(f"Sample number per further steps: {SECOND_CHUNK_SIZE}\n")
         output.write(
@@ -131,10 +209,15 @@ def main():
         # Choose ligand FF
         if MOLECULE_TYPE == "protein":
             force_field_ligand = "leaprc.protein.ff19SB"
+            parameterized = (
+                True  # proteins are pre-parameterized in ff19SB → skip antechamber
+            )
         elif MOLECULE_TYPE == "organic":
             force_field_ligand = "leaprc.gaff2"
+            parameterized = False  # small molecules need antechamber/parmchk2
         else:
             force_field_ligand = "leaprc.lipid21"
+            parameterized = False  # standard lipids in lipid21 → skip antechamber
         output.write(
             f"Force field selected for the ligand molecule: {force_field_ligand}\n"
         )
@@ -149,7 +232,7 @@ def main():
             pdb_path=PDB_PATH,
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
-            parameterized=False,
+            parameterized=parameterized,
         )
 
         # Build a separate complex with just the ligand to compute COM for sampling
@@ -161,7 +244,7 @@ def main():
             pdb_path=PDB_PATH,
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
-            parameterized=False,
+            parameterized=parameterized,
         )
         c.build()
 
