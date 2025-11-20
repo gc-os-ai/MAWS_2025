@@ -102,4 +102,5 @@ cython_debug/
 data/
 *.pdf
 *.png/ 
+*.log
 # We have to correct all this before release

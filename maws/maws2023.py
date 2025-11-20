@@ -8,6 +8,7 @@
 
 import argparse
 import copy
+import logging
 from datetime import datetime
 
 import numpy as np
@@ -37,23 +38,23 @@ def _resolve_pdb_path(
     keep_chains: str,
     remove_h: bool,
     drop_hetatm: bool,
-    logger=None,
+    logger: logging.Logger | None = None,
 ) -> tuple[str, str]:
     """
     Decide the PDB path to use (possibly cleaned). Returns (final_path, original_path).
 
     - Cleans only if `clean_pdb=True` AND `molecule_type == "protein"`.
-    - Logs to `logger(msg: str)` if provided (same file handle as your run log).
+    - Logs to the provided logger if not None.
     """
     original = pdb_path
     if not clean_pdb:
         return pdb_path, original
 
     if molecule_type != "protein":
-        if logger:
-            logger(
-                "[WARN] --clean-pdb is intended for protein inputs;"
-                "skipping for non-protein types.\n"
+        if logger is not None:
+            logger.warning(
+                "--clean-pdb is intended for protein inputs; "
+                "skipping cleaning for non-protein types."
             )
         return pdb_path, original
 
@@ -64,12 +65,12 @@ def _resolve_pdb_path(
             remove_h=remove_h,  # True/False
             drop_hetatm=drop_hetatm,  # True/False
         )
-        if logger:
-            logger(f"[CLEAN] Cleaned PDB written to: {new_path}\n")
+        if logger is not None:
+            logger.info("Cleaned PDB written to: %s", new_path)
         return new_path, original
     except Exception as e:
-        if logger:
-            logger(f"[WARN] PDB cleaning failed; using original file. Reason: {e}\n")
+        if logger is not None:
+            logger.warning("PDB cleaning failed; using original file. Reason: %s", e)
         return pdb_path, original
 
 
@@ -161,19 +162,36 @@ def main():
     MOLECULE_TYPE = args.moleculetype
     N_ELEMENTS = 4  # rotatable backbone torsions per residue
 
-    # Logs
+    # ---------------- Logging configuration ----------------
+    logger = logging.getLogger("maws")
+    logger.setLevel(logging.INFO)
+
+    # Avoid duplicate handlers if main() is called multiple times
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    file_handler = logging.FileHandler(f"{JOB_NAME}_output.log", mode="w")
+    file_handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    logger.addHandler(file_handler)
+
+    # Logs: only entropy + step cache are opened as files now
     with (
-        open(f"{JOB_NAME}_output.log", "w") as output,
         open(f"{JOB_NAME}_entropy.log", "w") as entropy_log,
         open(f"{JOB_NAME}_step_cache.pdb", "w") as step,
     ):
         # Header
-        output.write("MAWS - Making Aptamers With Software\n")
-        output.write(f"Active version: {VERSION} (released:_{RELEASE_DATE})\n")
-        output.write(f"Computational method: {METHOD}\n")
-        output.write(f"Type of aptamer: {APTAMER_TYPE}\n")
-        output.write(f"Type of ligand molecule: {MOLECULE_TYPE}\n")
-        output.write(f"Job: {JOB_NAME}\n")
+        logger.info("MAWS - Making Aptamers With Software")
+        logger.info("Active version: %s (released: %s)", VERSION, RELEASE_DATE)
+        logger.info("Computational method: %s", METHOD)
+        logger.info("Type of aptamer: %s", APTAMER_TYPE)
+        logger.info("Type of ligand molecule: %s", MOLECULE_TYPE)
+        logger.info("Job: %s", JOB_NAME)
+
         # Resolve (and optionally clean) the PDB before any LEaP calls
         PDB_PATH, ORIGINAL_PDB_PATH = _resolve_pdb_path(
             PDB_PATH,
@@ -182,18 +200,20 @@ def main():
             keep_chains=args.keep_chains,
             remove_h=args.remove_h,
             drop_hetatm=args.drop_hetatm,
-            logger=output.write,
+            logger=logger,
         )
-        output.write(f"Input file (original): {ORIGINAL_PDB_PATH}\n")
+        logger.info("Input file (original): %s", ORIGINAL_PDB_PATH)
         if PDB_PATH != ORIGINAL_PDB_PATH:
-            output.write(f"Input file (cleaned):  {PDB_PATH}\n")
-        output.write(f"Sample number in initial step: {FIRST_CHUNK_SIZE}\n")
-        output.write(f"Sample number per further steps: {SECOND_CHUNK_SIZE}\n")
-        output.write(
-            f"Number of further steps: {N_NTIDES} (sequence length = {N_NTIDES + 1})\n"
+            logger.info("Input file (cleaned): %s", PDB_PATH)
+        logger.info("Sample number in initial step: %d", FIRST_CHUNK_SIZE)
+        logger.info("Sample number per further steps: %d", SECOND_CHUNK_SIZE)
+        logger.info(
+            "Number of further steps: %d (sequence length = %d)",
+            N_NTIDES,
+            N_NTIDES + 1,
         )
-        output.write(f"Value of beta: {BETA}\n")
-        output.write(f"Start time: {datetime.now()}\n")
+        logger.info("Value of beta: %s", BETA)
+        logger.info("Start time: %s", datetime.now())
 
         # Choose aptamer FF and residue
         if APTAMER_TYPE == "RNA":
@@ -204,7 +224,7 @@ def main():
             molecule = load_dna_structure()
             nt_list = "GATC"
             force_field_aptamer = "leaprc.DNA.OL21"
-        output.write(f"Force field selected for the aptamer: {force_field_aptamer}\n")
+        logger.info("Force field selected for the aptamer: %s", force_field_aptamer)
 
         # Choose ligand FF
         if MOLECULE_TYPE == "protein":
@@ -218,8 +238,9 @@ def main():
         else:
             force_field_ligand = "leaprc.lipid21"
             parameterized = False  # standard lipids in lipid21 → skip antechamber
-        output.write(
-            f"Force field selected for the ligand molecule: {force_field_ligand}\n"
+        logger.info(
+            "Force field selected for the ligand molecule: %s",
+            force_field_ligand,
         )
 
         # Complex template with an empty aptamer chain + the ligand from PDB
@@ -259,14 +280,14 @@ def main():
         best_entropy = None
         best_sequence = None
         best_positions = None
-        best_ntide = None
+        # best_ntide = None
         best_topology = None
 
-        output.write("Initialized successfully!\n")
+        logger.info("Initialized successfully; starting step 1.")
 
         # ---- Step 1: choose the first nucleotide ----------------------------
         for ntide in nt_list:
-            output.write(f"{datetime.now()}: starting initial step for '{ntide}'\n")
+            logger.info("Step 1: starting initial sampling for '%s'", ntide)
             energies = []
             free_E = None
             position = None
@@ -306,14 +327,21 @@ def main():
 
             entropy = S(energies, beta=BETA)
 
-            # Outputs
-            with open(f"{JOB_NAME}_1_{ntide}.pdb", "w") as pdblog:
-                app.PDBFile.writeModel(
-                    copy.deepcopy(cx.topology),
-                    position[:],
-                    file=pdblog,
-                    modelIndex=1,
-                )
+            # # Outputs
+            # with open(f"{JOB_NAME}_1_{ntide}.pdb", "w") as pdblog:
+            #     app.PDBFile.writeModel(
+            #         copy.deepcopy(cx.topology),
+            #         position[:],
+            #         file=pdblog,
+            #         modelIndex=1,
+            #     )
+
+            logger.info(
+                "Step 1: finished candidate '%s' (entropy=%s, best_E=%s)",
+                aptamer.alias_sequence,
+                entropy,
+                free_E,
+            )
 
             entropy_log.write(
                 f"SEQUENCE: {aptamer.alias_sequence} "
@@ -323,31 +351,25 @@ def main():
             if best_entropy is None or entropy < best_entropy:
                 best_entropy = entropy
                 best_sequence = ntide
-                best_ntide = ntide
                 best_positions = position[:]
                 best_topology = copy.deepcopy(cx.topology)
 
         # Cache best-of-step to file
         app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
-        with open(f"{JOB_NAME}_best_1_{best_ntide}.pdb", "w") as pdblog:
-            app.PDBFile.writeModel(
-                best_topology, best_positions, file=pdblog, modelIndex=1
-            )
-
-        output.write(
-            f"{datetime.now()}: Completed first step. "
-            f"Selected nucleotide: {best_sequence}\n"
-        )
-        output.write(
-            f"{datetime.now()}: Starting further steps to append "
-            f"{N_NTIDES} nucleotides\n"
-        )
+        logger.info("Completed first step. Selected nucleotide: %s", best_sequence)
+        logger.info("Starting further steps to append %d nucleotides", N_NTIDES)
 
         # ---- Steps 2..N: grow sequence --------------------------------------
         for i in range(1, N_NTIDES):
             best_old_sequence = best_sequence
             best_old_positions = best_positions[:]
             best_entropy = None
+
+            logger.info(
+                "Step %d: starting with current best sequence %s",
+                i + 1,
+                best_old_sequence,
+            )
 
             for ntide in nt_list:
                 for append in [True, False]:
@@ -400,13 +422,16 @@ def main():
 
                     entropy = S(energies, beta=BETA)
 
-                    with open(f"{JOB_NAME}_{i + 1}_{ntide}.pdb", "w") as pdblog:
-                        app.PDBFile.writeModel(
-                            copy.deepcopy(cx.topology),
-                            position[:],
-                            file=pdblog,
-                            modelIndex=1,
-                        )
+                    logger.info(
+                        "Step %d: finished candidate sequence %s "
+                        "(%s '%s') (entropy=%s, best_E=%s)",
+                        i + 1,
+                        aptamer.alias_sequence,
+                        "append" if append else "prepend",
+                        ntide,
+                        entropy,
+                        free_E,
+                    )
 
                     entropy_log.write(
                         f"SEQUENCE: {aptamer.alias_sequence} "
@@ -416,21 +441,28 @@ def main():
                     if best_entropy is None or entropy < best_entropy:
                         best_entropy = entropy
                         best_positions = position[:]
-                        best_ntide = ntide
                         best_sequence = aptamer.alias_sequence
                         best_topology = copy.deepcopy(cx.topology)
+
+                        logger.info(
+                            "Step %d: new best sequence %s "
+                            "(added '%s' on %s end; entropy=%s, best_E=%s)",
+                            i + 1,
+                            best_sequence,
+                            ntide,
+                            "3'" if append else "5'",
+                            best_entropy,
+                            free_E,
+                        )
 
             app.PDBFile.writeModel(
                 best_topology, best_positions, file=step, modelIndex=1
             )
-            output.write(
-                f"{datetime.now()}: Completed step {i + 1}. "
-                f"Selected sequence: {best_sequence}\n"
+            logger.info(
+                "Completed step %d. Selected sequence: %s",
+                i + 1,
+                best_sequence,
             )
-            with open(f"{JOB_NAME}_best_{i + 1}_{best_ntide}.pdb", "w") as pdblog:
-                app.PDBFile.writeModel(
-                    best_topology, best_positions, file=pdblog, modelIndex=1
-                )
 
         # ---- Final render ----------------------------------------------------
         result_complex = copy.deepcopy(cpx)
@@ -439,13 +471,17 @@ def main():
         result_complex.build()  # cached
         result_complex.positions = best_positions[:]
 
-        with open(f"{JOB_NAME}_RESULT.pdb", "w") as pdb_result:
+        result_pdb_name = f"{JOB_NAME}_RESULT.pdb"
+        with open(result_pdb_name, "w") as pdb_result:
             app.PDBFile.writeModel(
                 result_complex.topology, result_complex.positions, file=pdb_result
             )
 
-        output.write(f"{datetime.now()}: Run completed. Thank you for using MAWS!\n\n")
-        output.write(f"Final sequence: {best_sequence}\n")
+        logger.info(
+            "Run completed. Final sequence: %s (result written to %s)",
+            best_sequence,
+            result_pdb_name,
+        )
 
 
 if __name__ == "__main__":
