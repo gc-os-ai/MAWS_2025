@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -238,6 +239,75 @@ class Complex:
         structure = Structure([pdb_name], residue_length=[length], residue_path=path)
         self.add_chain(pdb_name, structure)
 
+        # ------------------ Platform selection (CPU/GPU) ------------------------
+
+    def _select_platform(self) -> mm.Platform | None:
+        """
+        Try to select a fast Platform (GPU if available), with safe fallbacks.
+
+        Order of precedence:
+        1. Environment variable MAWS_OPENMM_PLATFORM, if set and valid.
+        2. Any registered GPU-like platform (CUDA/OpenCL/HIP/ROCM) with the
+           highest reported speed.
+        3. Any non-Reference platform with the highest reported speed.
+        4. If nothing suitable is found or an error occurs, return None and let
+           OpenMM choose its default platform when creating the Simulation.
+        """
+        # Ensure plugins are loaded so GPU platforms are visible, but don't
+        # crash if plugins aren't configured.
+
+        plugin_dir = mm.Platform.getDefaultPluginsDirectory()
+        # This is idempotent; repeated calls are fine.
+        mm.Platform.loadPluginsFromDirectory(plugin_dir)
+
+        # 1) Explicit user override via env var
+        env_name = os.getenv("MAWS_OPENMM_PLATFORM")
+        # this needs to be mentioned in documenation to overvide by user using env
+        # variable
+        if env_name:
+            try:
+                return mm.Platform.getPlatformByName(env_name)
+            except Exception:
+                # Invalid name or plugin not available; fall back to auto mode.
+                pass
+
+        num = mm.Platform.getNumPlatforms()
+        if num == 0:
+            return None
+
+        gpu_names = {"CUDA", "OpenCL", "HIP", "ROCM"}  # known GPU-style names
+        gpu_platforms = []
+        other_platforms = []
+
+        for i in range(num):
+            p = mm.Platform.getPlatform(i)
+            name = p.getName()
+            try:
+                speed = float(p.getSpeed())
+                # print(f"Platform{name}: estimated {speed}")
+            except Exception:
+                speed = 0.0
+
+            entry = (speed, p)
+
+            if name.upper() in gpu_names:
+                gpu_platforms.append(entry)
+            elif name != "Reference":
+                other_platforms.append(entry)
+
+        # 2) Prefer the fastest GPU platform if any
+        if gpu_platforms:
+            gpu_platforms.sort(key=lambda sp: sp[0], reverse=True)
+            return gpu_platforms[0][1]
+
+        # 3) Otherwise pick the fastest non-Reference platform
+        if other_platforms:
+            other_platforms.sort(key=lambda sp: sp[0], reverse=True)
+            return other_platforms[0][1]
+
+        # 4) Fallback: let OpenMM choose
+        return None
+
     # LEaP + cache
 
     def _build_cache_key(self) -> str:
@@ -364,7 +434,20 @@ class Complex:
             constraints=None,
             implicitSolvent=app.OBC1,
         )
-        self.simulation = app.Simulation(self.topology, self.system, self.integrator)
+        # self.simulation = app.Simulation(self.topology, self.system, self.integrator)
+        platform = self._select_platform()
+        if platform is not None:
+            self.simulation = app.Simulation(
+                self.topology, self.system, self.integrator, platform
+            )
+        else:
+            # Fallback: let OpenMM choose its default platform
+            self.simulation = app.Simulation(
+                self.topology, self.system, self.integrator
+            )
+        # Debug remove this after check
+        active_name = self.simulation.context.getPlatform().getName()
+        print(f"[MAWS] OpenMM platform in use: {active_name}")
 
     # ---------------------------------  Geometry ops---------------
 
