@@ -100,4 +100,5 @@ data/
 *.pdf
 *.png/ 
 *.log
+*.lib
 # We have to correct all this before release
