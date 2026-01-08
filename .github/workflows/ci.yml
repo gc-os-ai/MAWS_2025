@@ -1,5 +1,6 @@
 # MAWS CI/CD Workflow
 # Runs tests on Linux with AmberTools and OpenMM across Python 3.10-3.13
+# Includes optional GPU testing when self-hosted runners with GPU are available
 
 name: CI
 
@@ -11,6 +12,9 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
+  # ============================================================================
+  # Full integration tests with AmberTools (CPU)
+  # ============================================================================
   test:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
@@ -52,7 +56,7 @@ jobs:
         run: |
           conda activate maws
           which tleap
-          tleap -h || echo "tleap help showed"
+          tleap -h || echo "tleap help displayed"
 
       - name: Run tests
         run: |
@@ -73,7 +77,9 @@ jobs:
           fail_ci_if_error: false
           verbose: true
 
-  # Fast unit tests only (no AmberTools needed)
+  # ============================================================================
+  # Fast unit tests (no AmberTools needed)
+  # ============================================================================
   unit-tests:
     name: Unit Tests Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
@@ -106,6 +112,77 @@ jobs:
             --ignore=tests/test_chain_complex.py \
             --ignore=tests/test_run.py
 
+  # ============================================================================
+  # GPU tests (only runs on self-hosted runners with NVIDIA GPU)
+  # To enable: add a self-hosted runner with GPU and label 'gpu'
+  # ============================================================================
+  gpu-test:
+    name: GPU Test
+    runs-on: [self-hosted, gpu]
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[gpu]')
+    continue-on-error: true  # Don't fail the whole workflow if GPU tests fail
+    
+    defaults:
+      run:
+        shell: bash -el {0}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check NVIDIA GPU
+        run: |
+          nvidia-smi
+          echo "CUDA devices found:"
+          nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          python-version: "3.10"
+          channels: conda-forge,bioconda,defaults
+          channel-priority: strict
+          activate-environment: maws-gpu
+          auto-activate-base: false
+
+      - name: Install dependencies with CUDA support
+        run: |
+          conda activate maws-gpu
+          # Install OpenMM with CUDA support
+          conda install -y openmm cudatoolkit ambertools mpmath numba pandas numpy
+
+      - name: Install package
+        run: |
+          conda activate maws-gpu
+          pip install -e ".[dev]"
+
+      - name: Verify CUDA platform
+        run: |
+          conda activate maws-gpu
+          python -c "
+          import openmm as mm
+          print('Available platforms:')
+          for i in range(mm.Platform.getNumPlatforms()):
+              p = mm.Platform.getPlatform(i)
+              print(f'  {p.getName()}')
+          try:
+              cuda = mm.Platform.getPlatformByName('CUDA')
+              print(f'CUDA platform found!')
+          except Exception as e:
+              print(f'CUDA not available: {e}')
+          "
+
+      - name: Run all tests including GPU
+        env:
+          MAWS_OPENMM_PLATFORM: CUDA
+        run: |
+          conda activate maws-gpu
+          pytest tests/ -v --tb=short -m "not slow"
+
+  # ============================================================================
+  # Linting
+  # ============================================================================
   lint:
     name: Lint
     runs-on: ubuntu-latest
