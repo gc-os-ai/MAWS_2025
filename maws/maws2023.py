@@ -17,7 +17,8 @@ from openmm import app, unit
 import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
-from maws.helpers import center_of_mass, nostrom
+from maws.helpers import nostrom
+from maws.kernels import center_of_mass
 from maws.pdb_cleaner import clean_one_file
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
@@ -37,23 +38,23 @@ def _resolve_pdb_path(
     keep_chains: str,
     remove_h: bool,
     drop_hetatm: bool,
-    logger: logging.Logger | None = None,
+    logger=None,
 ) -> tuple[str, str]:
     """
     Decide the PDB path to use (possibly cleaned). Returns (final_path, original_path).
 
     - Cleans only if `clean_pdb=True` AND `molecule_type == "protein"`.
-    - Logs to the provided logger if not None.
+    - Logs to `logger(msg: str)` if provided (same file handle as your run log).
     """
     original = pdb_path
     if not clean_pdb:
         return pdb_path, original
 
     if molecule_type != "protein":
-        if logger is not None:
-            logger.warning(
-                "--clean-pdb is intended for protein inputs; "
-                "skipping cleaning for non-protein types."
+        if logger:
+            logger(
+                "[WARN] --clean-pdb is intended for protein inputs;"
+                "skipping for non-protein types.\n"
             )
         return pdb_path, original
 
@@ -64,12 +65,12 @@ def _resolve_pdb_path(
             remove_h=remove_h,  # True/False
             drop_hetatm=drop_hetatm,  # True/False
         )
-        if logger is not None:
-            logger.info("Cleaned PDB written to: %s", new_path)
+        if logger:
+            logger(f"[CLEAN] Cleaned PDB written to: {new_path}\n")
         return new_path, original
     except Exception as e:
-        if logger is not None:
-            logger.warning("PDB cleaning failed; using original file. Reason: %s", e)
+        if logger:
+            logger(f"[WARN] PDB cleaning failed; using original file. Reason: {e}\n")
         return pdb_path, original
 
 
@@ -184,13 +185,12 @@ def main():
         open(f"{JOB_NAME}_step_cache.pdb", "w") as step,
     ):
         # Header
-        logger.info("MAWS - Making Aptamers With Software")
-        logger.info("Active version: %s (released: %s)", VERSION, RELEASE_DATE)
-        logger.info("Computational method: %s", METHOD)
-        logger.info("Type of aptamer: %s", APTAMER_TYPE)
-        logger.info("Type of ligand molecule: %s", MOLECULE_TYPE)
-        logger.info("Job: %s", JOB_NAME)
-
+        output.write("MAWS - Making Aptamers With Software\n")
+        output.write(f"Active version: {VERSION} (released:_{RELEASE_DATE})\n")
+        output.write(f"Computational method: {METHOD}\n")
+        output.write(f"Type of aptamer: {APTAMER_TYPE}\n")
+        output.write(f"Type of ligand molecule: {MOLECULE_TYPE}\n")
+        output.write(f"Job: {JOB_NAME}\n")
         # Resolve (and optionally clean) the PDB before any LEaP calls
         PDB_PATH, ORIGINAL_PDB_PATH = _resolve_pdb_path(
             PDB_PATH,
@@ -199,7 +199,15 @@ def main():
             keep_chains=args.keep_chains,
             remove_h=args.remove_h,
             drop_hetatm=args.drop_hetatm,
-            logger=logger,
+            logger=output.write,
+        )
+        output.write(f"Input file (original): {ORIGINAL_PDB_PATH}\n")
+        if PDB_PATH != ORIGINAL_PDB_PATH:
+            output.write(f"Input file (cleaned):  {PDB_PATH}\n")
+        output.write(f"Sample number in initial step: {FIRST_CHUNK_SIZE}\n")
+        output.write(f"Sample number per further steps: {SECOND_CHUNK_SIZE}\n")
+        output.write(
+            f"Number of further steps: {N_NTIDES} (sequence length = {N_NTIDES + 1})\n"
         )
         logger.info("Input file (original): %s", ORIGINAL_PDB_PATH)
         if PDB_PATH != ORIGINAL_PDB_PATH:
@@ -237,9 +245,8 @@ def main():
         else:
             force_field_ligand = "leaprc.lipid21"
             parameterized = False  # standard lipids in lipid21 → skip antechamber
-        logger.info(
-            "Force field selected for the ligand molecule: %s",
-            force_field_ligand,
+        output.write(
+            f"Force field selected for the ligand molecule: {force_field_ligand}\n"
         )
 
         # Complex template with an empty aptamer chain + the ligand from PDB
