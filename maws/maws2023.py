@@ -24,7 +24,7 @@ from maws.routines import S
 
 # VERSION = "2.1" # Original Authoras To-do: cite in readme
 # RELEASE_DATE = "2017" # Original Authors To-do: cite in readme
-VERSION = "2.2"  # Siddharth
+VERSION = "1.0"  # Siddharth
 RELEASE_DATE = "2025"  # Siddharth
 METHOD = "Kullback-Leibler"
 
