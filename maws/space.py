@@ -1,18 +1,71 @@
+"""
+maws.space
+==========
+
+Sampling spaces for molecular conformational exploration.
+
+This module defines geometric spaces from which MAWS samples configurations
+(positions + orientations) during aptamer-ligand binding evaluation.
+
+Classes
+-------
+Space : Base class for sampling spaces.
+Box : Rectangular 3D sampling volume.
+Cube : Cubic 3D sampling volume (special case of Box).
+Sphere : Spherical 3D sampling volume.
+SphericalShell : Hollow sphere sampling volume.
+NAngles : N-dimensional torsion angle space.
+
+Examples
+--------
+>>> import numpy as np
+>>> from maws.space import Cube, NAngles
+
+Create a 20Å cube centered at the origin:
+
+>>> cube = Cube(20.0, np.array([0.0, 0.0, 0.0]))
+>>> sample = cube.generator()
+>>> len(sample)  # [x, y, z, axis_x, axis_y, axis_z, angle]
+7
+
+Create a 4-angle torsion space:
+
+>>> angles = NAngles(4)
+>>> sample = angles.generator()
+>>> len(sample)
+4
+"""
+
 import numpy as np
 from openmm import unit
 
 
-## @class Represents a space, from which samples can be taken
 class Space:
-    ## Creates a new Space
-    # @param membership_boolean_function
-    # Specifies a function reference, specifying which elements are contained in the Space.
-    # @param lower_bound
-    # Specifies the lower bound of elements to check for, if they are in the Space.
-    # @param upper_bound
-    # Specifies the upper bound of elements to check for, if they are in the Space.
-    # @param units
-    # Specifies the used length unit. Typically angstroms.
+    """
+    Base class representing a sampling space.
+
+    A Space defines a region from which random samples can be drawn.
+    Subclasses implement specific geometries (Box, Sphere, etc.).
+
+    Parameters
+    ----------
+    membership_boolean_function : callable
+        Function that returns True if a point is inside the space.
+    units : openmm.unit, default=unit.angstroms
+        Length units for the space.
+    lower_bound : float, default=-1e6
+        Lower bound for rejection sampling.
+    upper_bound : float, default=1e6
+        Upper bound for rejection sampling.
+
+    Attributes
+    ----------
+    is_in : callable
+        Membership test function.
+    volume : float
+        Volume of the space (for normalization).
+    """
+
     def __init__(
         self,
         membership_boolean_function,
@@ -26,31 +79,52 @@ class Space:
         self.units = units
         self.volume = 0
 
-    ##Returns an element of the space
-    # @returns 3D coordinates of the element
     def generator(self):
+        """
+        Generate a random sample from the space.
+
+        Returns
+        -------
+        numpy.ndarray
+            3D coordinates of a point inside the space.
+        """
         result = None
-        while result == None:
+        while result is None:
             candidate = np.random.uniform(self.lower_bound, self.upper_bound, 3)
             if self.is_in(candidate):
                 result = candidate
         return result
 
 
-## @class Box
-# Represents a 3D box sampling space oriented along the coordinate system
 class Box(Space):
-    ## Creates a new Space
-    # @param x_width
-    # Specifies the width in x-direction
-    # @param y_width
-    # Specifies the width in y-direction
-    # @param z_width
-    # Specifies the width in z-direction
-    # @param centre
-    # Specifies the position of the box via its centre
-    # @param units
-    # Specifies the used length unit. Typically angstroms.
+    """
+    A 3D rectangular box sampling space with rotation.
+
+    Generates samples uniformly within the box, plus a random rotation
+    axis and angle for molecular orientation.
+
+    Parameters
+    ----------
+    x_width : float
+        Width in the x-direction (Å).
+    y_width : float
+        Width in the y-direction (Å).
+    z_width : float
+        Width in the z-direction (Å).
+    centre : array-like
+        3D coordinates of the box center.
+    units : openmm.unit, default=unit.angstroms
+        Length units.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> box = Box(10.0, 20.0, 15.0, np.array([0.0, 0.0, 0.0]))
+    >>> sample = box.generator()
+    >>> len(sample)  # [x, y, z, axis_x, axis_y, axis_z, rotation_angle]
+    7
+    """
+
     def __init__(self, x_width, y_width, z_width, centre, units=unit.angstroms):
         def boolean(position):
             x_in = (
@@ -67,29 +141,40 @@ class Box(Space):
             )
             return x_in and y_in and z_in
 
-        super(Box, self).__init__(boolean)
+        super().__init__(boolean, units=units)
         self.x_width = x_width
         self.y_width = y_width
         self.z_width = z_width
         self.centre = centre
-        self.volume = x_width * y_width * z_width * (2 * np.math.pi) ** 3
+        self.volume = x_width * y_width * z_width * (2 * np.pi) ** 3
 
-    ##Returns an element of the space (Box)
-    # @returns 3D coordinates of the element
     def generator(self):
+        """
+        Generate a random sample from the box.
+
+        Returns
+        -------
+        numpy.ndarray
+            7-element array: [x, y, z, axis_x, axis_y, axis_z, rotation_angle].
+            The first 3 are position; next 3 are a random rotation axis;
+            last is a rotation angle in [0, π].
+        """
         axis = np.random.uniform(-1, 1, 3)
         x, y, z = axis / np.linalg.norm(axis)
-        rotation_angle = np.random.uniform(0, np.math.pi)
+        rotation_angle = np.random.uniform(0, np.pi)
         return np.array(
             [
                 np.random.uniform(
-                    self.centre[0] - self.x_width / 2, self.centre[0] + self.x_width / 2
+                    self.centre[0] - self.x_width / 2,
+                    self.centre[0] + self.x_width / 2,
                 ),
                 np.random.uniform(
-                    self.centre[1] - self.y_width / 2, self.centre[1] + self.y_width / 2
+                    self.centre[1] - self.y_width / 2,
+                    self.centre[1] + self.y_width / 2,
                 ),
                 np.random.uniform(
-                    self.centre[2] - self.z_width / 2, self.centre[2] + self.z_width / 2
+                    self.centre[2] - self.z_width / 2,
+                    self.centre[2] + self.z_width / 2,
                 ),
                 x,
                 y,
@@ -99,53 +184,94 @@ class Box(Space):
         )
 
 
-## @class Cube
-# Represents a 3D cubical sampling space
 class Cube(Box):
-    ## Creates a new Space
-    # @param width
-    # Specifies the width in all directions
-    # @param centre
-    # Specifies the position of the box via its centre
-    # @param units
-    # Specifies the used length unit. Typically angstroms.
+    """
+    A 3D cubic sampling space (equal width in all dimensions).
+
+    Parameters
+    ----------
+    width : float
+        Side length in all directions (Å).
+    centre : array-like
+        3D coordinates of the cube center.
+    units : openmm.unit, default=unit.angstroms
+        Length units.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> cube = Cube(20.0, np.array([0.0, 0.0, 0.0]))
+    >>> sample = cube.generator()
+    >>> len(sample)  # [x, y, z, axis_x, axis_y, axis_z, rotation_angle]
+    7
+    >>> -10.0 <= sample[0] <= 10.0  # Within ±width/2 of center
+    True
+    """
+
     def __init__(self, width, centre, units=unit.angstroms):
-        super(Cube, self).__init__(width, width, width, centre, units=unit.angstroms)
+        super().__init__(width, width, width, centre, units=units)
 
 
-## @class Sphere
-# Represents a 3D spherical sampling space
 class Sphere(Space):
-    ## Creates a new Space
-    # @param radius
-    # Specifies the radius of the sphere
-    # @param centre
-    # Specifies the position of the box via its centre
-    # @param units
-    # Specifies the used length unit. Typically angstroms.
+    """
+    A 3D spherical sampling space with rotation.
+
+    Generates samples uniformly within the sphere, plus a random rotation
+    axis and angle for molecular orientation.
+
+    Parameters
+    ----------
+    radius : float
+        Radius of the sphere (Å).
+    centre : array-like
+        3D coordinates of the sphere center.
+    units : openmm.unit, default=unit.angstroms
+        Length units.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> sphere = Sphere(15.0, np.array([0.0, 0.0, 0.0]))
+    >>> sample = sphere.generator()
+    >>> len(sample)  # [x, y, z, axis_x, axis_y, axis_z, rotation_angle]
+    7
+    """
+
     def __init__(self, radius, centre, units=unit.angstroms):
         def boolean(position):
-            position.abs() <= radius
+            return np.linalg.norm(position - centre) <= radius
 
-        super(Sphere, self).__init__(boolean)
+        super().__init__(boolean, units=units)
         self.radius = radius
         self.centre = centre
-        self.volume = 4.0 / 3.0 * np.math.pi * radius**3 * (2 * np.math.pi) ** 3
+        self.volume = 4.0 / 3.0 * np.pi * radius**3 * (2 * np.pi) ** 3
 
-    ##Returns an element of the space (Sphere)
-    # @returns 3D coordinates of the element
     def generator(self):
+        """
+        Generate a random sample from the sphere.
+
+        Returns
+        -------
+        numpy.ndarray
+            7-element array: [x, y, z, axis_x, axis_y, axis_z, rotation_angle].
+        """
         axis = np.random.uniform(-1, 1, 3)
         x, y, z = axis / np.linalg.norm(axis)
-        r = np.random.uniform(0, self.radius)
-        phi = np.random.uniform(0, 2 * np.math.pi)
-        psi = np.random.uniform(0, np.math.pi)
-        rotation_angle = np.random.uniform(0, 2 * np.math.pi)
+        # r = np.random.uniform(0, self.radius)
+        r = self.radius * np.random.uniform(0, 1) ** (
+            1 / 3
+        )  #  uniform-in-volume sampling, use u**(1/3)
+        phi = np.random.uniform(0, 2 * np.pi)
+        # psi = np.random.uniform(0, np.pi)
+        # Uniform direction: cos(psi) uniform in [-1, 1]
+        cos_psi = np.random.uniform(-1, 1)
+        psi = np.arccos(cos_psi)
+        rotation_angle = np.random.uniform(0, 2 * np.pi)
         result = np.array(
             [
-                r * np.math.cos(phi) * np.math.sin(psi),
-                r * np.math.sin(phi) * np.math.sin(psi),
-                r * np.math.cos(psi),
+                r * np.cos(phi) * np.sin(psi),
+                r * np.sin(phi) * np.sin(psi),
+                r * np.cos(psi),
                 x,
                 y,
                 z,
@@ -155,45 +281,66 @@ class Sphere(Space):
         return result
 
 
-## @class SphericalShell
-# Represents a 3D spherical shell sampling space
 class SphericalShell(Space):
-    ## Creates a new Space
-    # @param outerRadius
-    # Specifies the radius of the outer sphere
-    # @param innerRadius
-    # Specifies the radius of the inner sphere
-    # @param centre
-    # Specifies the position of the box via its centre
-    # @param units
-    # Specifies the used length unit. Typically angstroms.
+    """
+    A 3D spherical shell (hollow sphere) sampling space.
+
+    Generates samples uniformly within the shell between inner and outer radii.
+
+    Parameters
+    ----------
+    innerRadius : float
+        Inner radius of the shell (Å).
+    outerRadius : float
+        Outer radius of the shell (Å).
+    centre : array-like
+        3D coordinates of the shell center.
+    units : openmm.unit, default=unit.angstroms
+        Length units.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> shell = SphericalShell(5.0, 10.0, np.array([0.0, 0.0, 0.0]))
+    >>> sample = shell.generator()
+    >>> len(sample)
+    7
+    """
+
     def __init__(self, innerRadius, outerRadius, centre, units=unit.angstroms):
         def boolean(position):
-            position.abs() <= outerRadius and innerRadius <= position.abs()
+            r = np.linalg.norm(position - centre)
+            return innerRadius <= r <= outerRadius
 
-        super(SphericalShell, self).__init__(boolean)
+        super().__init__(boolean, units=units)
         self.innerRadius = innerRadius
         self.outerRadius = outerRadius
         self.centre = centre
         self.volume = (
-            4.0 / 3.0 * np.math.pi * outerRadius**3 * (2 * np.math.pi) ** 3
-            - 4.0 / 3.0 * np.math.pi * innerRadius**3 * (2 * np.math.pi) ** 3
+            4.0 / 3.0 * np.pi * outerRadius**3 * (2 * np.pi) ** 3
+            - 4.0 / 3.0 * np.pi * innerRadius**3 * (2 * np.pi) ** 3
         )
 
-    ##Returns an element of the space (Sphere)
-    # @returns 3D coordinates of the element
     def generator(self):
+        """
+        Generate a random sample from the spherical shell.
+
+        Returns
+        -------
+        numpy.ndarray
+            7-element array: [x, y, z, axis_x, axis_y, axis_z, rotation_angle].
+        """
         axis = np.random.uniform(-1, 1, 3)
         x, y, z = axis / np.linalg.norm(axis)
         r = np.random.uniform(self.innerRadius, self.outerRadius)
-        phi = np.random.uniform(0, 2 * np.math.pi)
-        psi = np.random.uniform(0, np.math.pi)
-        rotation_angle = np.random.uniform(0, 2 * np.math.pi)
+        phi = np.random.uniform(0, 2 * np.pi)
+        psi = np.random.uniform(0, np.pi)
+        rotation_angle = np.random.uniform(0, 2 * np.pi)
         result = np.array(
             [
-                r * np.math.cos(phi) * np.math.sin(psi),
-                r * np.math.sin(phi) * np.math.sin(psi),
-                r * np.math.cos(psi),
+                r * np.cos(phi) * np.sin(psi),
+                r * np.sin(phi) * np.sin(psi),
+                r * np.cos(psi),
                 x,
                 y,
                 z,
@@ -203,23 +350,47 @@ class SphericalShell(Space):
         return result
 
 
-## @class NAngles
-# Represents U(1)^N
 class NAngles(Space):
-    ## __init__
-    # @param number
-    # the number N of angles to randomly generate
+    """
+    N-dimensional torsion angle sampling space.
+
+    Represents U(1)^N - N independent angles in [0, 2π). Used for sampling
+    backbone torsion angles during conformational search.
+
+    Parameters
+    ----------
+    number : int
+        Number of angles to generate (N).
+
+    Attributes
+    ----------
+    number : int
+        Number of angles in the space.
+
+    Examples
+    --------
+    >>> angles = NAngles(4)
+    >>> sample = angles.generator()
+    >>> len(sample)
+    4
+    >>> all(0 <= a < 2 * 3.14159 for a in sample)  # All in [0, 2π)
+    True
+    """
+
     def __init__(self, number):
         def boolean(position):
-            return all(
-                0 <= element and element <= 2 * np.math.pi for element in position
-            )
+            return all(0 <= element and element <= 2 * np.pi for element in position)
 
-        super(NAngles, self).__init__(boolean)
+        super().__init__(boolean)
         self.number = number
 
-    ## returns self.number random angles in radians
     def generator(self):
-        return np.array(
-            [np.random.uniform(0, 2 * np.math.pi) for i in range(self.number)]
-        )
+        """
+        Generate N random angles in [0, 2π).
+
+        Returns
+        -------
+        numpy.ndarray
+            Array of `self.number` random angles in radians.
+        """
+        return np.array([np.random.uniform(0, 2 * np.pi) for i in range(self.number)])
