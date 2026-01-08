@@ -17,8 +17,7 @@ from openmm import app, unit
 import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
-from maws.helpers import nostrom
-from maws.kernels import center_of_mass
+from maws.helpers import center_of_mass, nostrom
 from maws.pdb_cleaner import clean_one_file
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
@@ -294,7 +293,7 @@ def main():
 
             # Clone the template complex
             cx = copy.deepcopy(cpx)
-            aptamer = cx.chains[0]
+            aptamer = cx.aptamer_chain()
 
             # Seed sequence and build (LEaP build will hit cache after first time)
             aptamer.create_sequence(ntide)
@@ -378,7 +377,7 @@ def main():
                     position = None
 
                     cx = copy.deepcopy(cpx)
-                    aptamer = cx.chains[0]
+                    aptamer = cx.aptamer_chain()
                     aptamer.create_sequence(best_old_sequence)
 
                     cx.build()  # cached
@@ -466,7 +465,7 @@ def main():
 
         # ---- Final render ----------------------------------------------------
         result_complex = copy.deepcopy(cpx)
-        aptamer = result_complex.chains[0]
+        aptamer = result_complex.aptamer_chain()
         aptamer.create_sequence(best_sequence)
         result_complex.build()  # cached
         result_complex.positions = best_positions[:]
