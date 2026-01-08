@@ -53,15 +53,6 @@ def find_exe(name: str) -> str:
     ExecError
         If the executable is not found on PATH.
 
-    Examples
-    --------
-    >>> from maws.tools import find_exe, ExecError
-    >>> try:
-    ...     path = find_exe("python")
-    ...     "python" in path.lower()
-    ... except ExecError:
-    ...     True  # Python not found (unlikely)
-    True
     """
     exe = shutil.which(name)
     if not exe:
