@@ -1,62 +1,11 @@
 """
-MAWS residue template and topology rules.
+maws.structure
+==============
 
-This module defines the **static chemistry** used by MAWS:
-- Residue metadata (atom counts, alias mapping for LEaP names)
-- Polymer connectivity rules for appending/prepending residues
-- Rotating elements (torsion definitions) used at runtime
-- Backbone anchor indices (normalized at construction)
+Residue templates and topology rules for MAWS.
 
-Design
-------
-`Structure` is a lightweight container that holds *per-residue rules*.
-Runtime code (e.g., :class:`maws.chain.Chain` and :class:`maws.complex.Complex`)
-consults these rules to:
-  - translate human-friendly alias sequences into canonical LEaP names,
-  - calculate residue lengths and index offsets,
-  - decide which atom triples define rotatable elements,
-  - find which atoms should be joined when growing a polymer chain.
-
-Indexing conventions
---------------------
-- Atom indices are **0-based** inside each residue.
-- Negative indices mean “from the end” (Python style), e.g. -1 → last atom.
-- Backbone indices are normalized to **non-negative** at construction since
-  downstream code uses them directly without further normalization.
-- Torsion (rotation) indices are **not** normalized at construction: negative
-  indices are kept and normalized later at runtime in :meth:`Structure.torsions`.
-
-LEaP resources
---------------
-If `residue_path` is given (or `""` for current directory), `Structure` creates
-a deterministic `init_string` that loads `<name>.lib` and `<name>.frcmod` for
-each residue, suitable to paste into a LEaP input file.
-
-Examples
---------
-Build a minimal single-residue template:
-
->>> s = Structure(
-...     residue_names=["X"],
-...     residue_length=[3],
-...     rotating_elements=[("X", 0, 1, None)],  # torsion about bond (0,1)
-...     backbone_elements=[("X", 0, 1, 2, 1, 2)],  # connection anchors
-...     connect=[[[0, -1], [-2, 0], 1.6, 1.6]],  # polymer rules
-...     alias=[["X", "X", "X", "X", "X"]],  # alone/start/middle/end
-... )
->>> s.resolve_index("X", -1)
-2
->>> s.torsions("X")
-[(0, 1, None)]
->>> s.translate("X X X")
-'X X X'  # first=start, middle=middle, last=end
-
-See Also
---------
-maws.chain.Chain
-    Consumes `Structure` to manage per-chain sequences and geometry.
-maws.complex.Complex
-    Owns coordinates and uses `Chain` to apply rotations/translations.
+Defines per-residue metadata: atom counts, alias mapping, connectivity rules,
+and torsion definitions used by Chain and Complex.
 """
 
 from __future__ import annotations
@@ -64,41 +13,18 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import TypeAlias
 
-# Type aliases to make shapes explicit
+# Type aliases
 ResidueName: TypeAlias = str
-AtomIndex: TypeAlias = (
-    int  # 0-based; negative values mean "from the end" (Python-style)
-)
+AtomIndex: TypeAlias = int  # 0-based; negative = from end
 
-# Rotation specification at construction:
-# (residue, start_atom_idx, bond_atom_idx, end_atom_idx_or_None)
 RotationSpec: TypeAlias = tuple[ResidueName, AtomIndex, AtomIndex, AtomIndex | None]
-
-# Backbone specification at construction (raw indices, may be negative):
-# (residue, start, middle_pre, bond, middle_post, end)
 BackboneSpec: TypeAlias = tuple[
     ResidueName, AtomIndex, AtomIndex, AtomIndex, AtomIndex, AtomIndex
 ]
-
-# Stored backbone entry after normalization to non-negative indices:
-# [[start, middle_pre, bond], [middle_post, end]]
 BackboneEntry: TypeAlias = list[list[int]]
-
-# A single rotation triple stored internally as a list: [start, bond, end_or_None]
 RotTripleStored: TypeAlias = list[int | None]
-
-# The per-residue rotation list:
-# either [[start, bond, end], ...] OR the sentinel [None] meaning “not defined yet”.
-RotListStored: TypeAlias = list[RotTripleStored]  # OR the sentinel: [None]
-
-# Alias entry stored per residue: [alone, start, middle, end]
+RotListStored: TypeAlias = list[RotTripleStored]
 AliasEntry: TypeAlias = list[str]
-
-# Connectivity entry stored per residue:
-# [[append_first, append_last],
-# [prepend_last, prepend_first],
-# append_bond_len, prepend_bond_len]
-# Atom indices may be negative (Python-style). Bond lengths are in Å.
 ConnectEntry: TypeAlias = list[list[int] | float]
 
 
@@ -109,57 +35,19 @@ class Structure:
     Parameters
     ----------
     residue_names : Sequence[str]
-        Residue template names in **fixed order** (e.g. `["A", "C", "G", "U"]` or
-        `["DG", ...]`).
-        This order is used to align other per-residue arrays (lengths,
-        connectivity, etc.).
+        Residue template names in fixed order.
     residue_length : Sequence[int], optional
-        Number of atoms per residue, aligned 1:1 with `residue_names`.
-        Used for:
-          * normalizing negative indices in backbone specs,
-          * resolving indices in helpers like :meth:`resolve_index`,
-          * computing chain atom counts.
+        Atom count per residue.
     rotating_elements : Sequence[RotationSpec], optional
-        Torsion definitions: triples `(residue, start, bond, end_or_None)`.
-        Negative indices are allowed and will be normalized *later* by :meth:`torsions`.
+        Torsion definitions: (residue, start, bond, end_or_None).
     backbone_elements : Sequence[BackboneSpec], optional
-        `(residue, start, middle_pre, bond, middle_post, end)`; indices may be negative.
-        These are normalized to **non-negative** indices at construction and stored as
-        `[[start, middle_pre, bond], [middle_post, end]]`.
+        Connection anchors for polymer growth.
     connect : Sequence[ConnectEntry], optional
-        Per-residue polymer connectivity rules:
-        `[[append_first, old_last], [new_last, old_first], append_len, prepend_len]`.
-        Indices may be negative. Bond lengths are floats in Å.
-        If omitted, a generic default `[[0, -1], [-2, 0], 1.6, 1.6]` is used.
+        Polymer connectivity rules.
     residue_path : str | None, optional
-        Directory containing `<name>.lib` and `<name>.frcmod` for each residue.
-        If `""`, use `"."`. If `None`, no LEaP `init_string` is produced.
+        Directory containing .lib/.frcmod files for LEaP.
     alias : Sequence[Sequence[str]] | None, optional
-        Alias mapping rows `[residue_name, alone, start, middle, end]`.
-        Internally stored per residue as `[alone, start, middle, end]`.
-        If omitted, defaults to identity mapping for all residues.
-
-    Attributes
-    ----------
-    init_string : str
-        Deterministic LEaP bootstrap (one `loadoff` + `loadamberparams` pair per
-        residue),or empty if `residue_path is None`.
-    residue_length : dict[str, int]
-        Map residue → atom count.
-    connect : dict[str, ConnectEntry]
-        Map residue → connectivity entry used by chain growth logic.
-    alias : dict[str, list[str]]
-        Map residue → `[alone, start, middle, end]` LEaP names.
-    rotating_elements : dict[str, RotListStored]
-        Map residue → rotation triples or sentinel `[None]`.
-    backbone_elements : dict[str, BackboneEntry]
-        Map residue → normalized backbone anchor indices.
-
-    Notes
-    -----
-    - Indices are 0-based. Negative values mean “from the end”.
-    - Backbone indices are normalized at construction; torsion indices are not.
-    - `init_string` is generated only when `residue_path` is not `None`.
+        Alias mapping rows [residue, alone, start, middle, end].
     """
 
     def __init__(
