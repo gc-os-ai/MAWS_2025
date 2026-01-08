@@ -2,6 +2,7 @@ name: maws
 channels:
   - conda-forge
   - bioconda
+<<<<<<< HEAD
   - nodefaults
 dependencies:
   - python>=3.10
@@ -17,3 +18,24 @@ dev-dependencies:
   - pre-commit
   - ruff
   - black
+=======
+  - defaults
+dependencies:
+  - python>=3.10,<3.14
+  # Core scientific computing
+  - numpy>=1.24
+  - pandas>=2.0
+  - ipykernel=6.19.2
+  - jupyterlab=3.3.2
+  # OpenMM and molecular simulation
+  - openmm>=8.0
+  - ambertools>=23
+  # High-precision math
+  - mpmath>=1.2
+  # Development tools
+  - pip
+  - pip:
+      - pytest>=8.0
+      - pytest-cov
+      - ruff>=0.12
+>>>>>>> 2234e65 (Updating environment.yml)
