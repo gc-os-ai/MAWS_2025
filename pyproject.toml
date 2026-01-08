@@ -7,23 +7,26 @@ name = "maws"
 version = "0.1.0.dev0"
 description = "MAWS: residue-based chemistry, complex preparation, and OpenMM routines for aptamer workflows"
 readme = "README.md"
-requires-python = ">=3.10"
-# To add names of authors into this.
+requires-python = ">=3.10,<3.14"
 
-# Runtime deps kept small; versions mirror your notes where sensible
+# Runtime dependencies
 dependencies = [
-  "numpy",
-  "openmm>=8.3.0,<8.4.0",
-  "numba>=0.40.1",
-
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "openmm>=8.0",
+  "mpmath>=1.2",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0.0",
+  "pytest>=8.0",
   "pytest-cov",
-  "ruff>=0.12.0",
+  "ruff>=0.12",
   "pre-commit",
+]
+# For GPU acceleration (CUDA)
+gpu = [
+  "openmm-cuda",
 ]
 
 [tool.setuptools]
@@ -32,7 +35,6 @@ include-package-data = true
 [tool.setuptools.packages.find]
 include = ["maws*"]
 
-# Include root-level data via MANIFEST.in (below)
 [tool.setuptools.package-data]
 # if you later move data under maws/, switch to:
 # maws = ["data/*.pdb", "data/*.sdf", "data/*.lib", "data/*.frcmod"]
@@ -54,3 +56,8 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+  "integration: marks tests as integration tests (require AmberTools/OpenMM)",
+  "slow: marks tests as slow running",
+  "gpu: marks tests that require GPU",
+]
