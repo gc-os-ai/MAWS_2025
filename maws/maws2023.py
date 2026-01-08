@@ -307,9 +307,9 @@ def main():
                 orientation = cube.generator()
                 rotation = rotations.generator()
 
-                aptamer.translate_global(orientation[0:3] * unit.angstrom)
-                aptamer.rotate_global(
-                    orientation[3:-1] * unit.angstrom, orientation[-1]
+                cx.translate_global(aptamer.element, orientation[0:3] * unit.angstrom)
+                cx.rotate_global(
+                    aptamer.element, orientation[3:-1] * unit.angstrom, orientation[-1]
                 )
 
                 for j in range(N_ELEMENTS):
