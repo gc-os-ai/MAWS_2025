@@ -2,44 +2,19 @@
 maws.complex
 ============
 
-High-level container that composes one or more :class:`maws.chain.Chain` objects
-and materializes them into AMBER topology/coordinates (``.prmtop``/``.inpcrd``)
-using AmberTools LEaP, then into OpenMM objects for simulation.
+High-level container that composes one or more Chain objects and materializes
+them into AMBER topology/coordinates using AmberTools LEaP, then into OpenMM
+objects for simulation.
 
-
-A :class:`~maws.complex.Complex` collects chains, builds AMBER artifacts with a
-deterministic content-addressed cache (under ``.maws_cache/``), and exposes
-OpenMM objects for energy queries and MD. Identical inputs never re-run LEaP.
-
-Key ideas
----------
-- A single flat coordinate array (``positions``) holds atoms of **all** chains.
-  Each chain records a ``start`` offset and a ``length`` to index its slice.
-- Static chemistry (residue lengths, alias mapping, connectivity, torsions)
-  lives in :class:`maws.structure.Structure`. A :class:`~maws.chain.Chain`
-  references a :class:`~maws.structure.Structure` and translates any alias
-  sequence to a canonical sequence for LEaP.
-- Disk I/O is bounded: template generation in :func:`maws.prepare.make_lib`,
-  and build/load in :meth:`maws.complex.Complex.build`. Everything else is
-  in-memory.
-- External tools (e.g., ``tleap``, ``antechamber``, ``parmchk2``) are discovered
-  on ``PATH``.
-
-Dependencies
-------------
-AmberTools (for LEaP and optional parameterization) and OpenMM.
-
-See Also
---------
-maws.chain.Chain
-maws.structure.Structure
-maws.prepare.make_lib
+Builds are content-addressed and cached under ``.maws_cache/``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -58,77 +33,18 @@ from maws.tools import find_exe, run
 
 class Complex:
     """
-    Container for one or more :class:`~maws.chain.Chain` objects that can be
-    materialized with AmberTools LEaP and simulated or queried with OpenMM.
-
-    Extended Summary
-    ----------------
-    A :class:`Complex` stores the chain list (topology composition), the current
-    simulation state (coordinates and OpenMM objects), and a LEaP preamble
-    (``build_string``). Builds are content-addressed and cached so identical
-    inputs reuse existing AMBER artifacts.
-
-    Design notes
-    ------------
-    Composition vs. builder
-      - ``Complex`` **owns**:
-        * the collection of :class:`~maws.chain.Chain` objects (topology),
-        * the simulation state (``positions``, ``topology``, ``system``,
-          ``integrator``, ``simulation``),
-        * the LEaP preamble (``build_string``) and the cache.
-      - Each :class:`Chain` **references** a :class:`maws.structure.Structure`,
-        which provides residue lengths, alias mapping, connectivity, and torsion
-        rules. A chain stores both the alias sequence and the **canonical**
-        LEaP sequence via ``Structure.translate(...)``.
-      - :meth:`Complex.build` acts as a *builder/materializer*: it turns the spec
-        (chains + structures + preamble) into AMBER artifacts and OpenMM objects.
-
-    File I/O boundaries
-      - ``add_chain_from_pdb(...)`` calls :func:`maws.prepare.make_lib`, which
-        works in a temporary directory and moves artifacts **next to the input**:
-        ``<name>.lib`` and, when parameterization is needed, ``<name>.frcmod``.
-      - :meth:`build(...)``:
-          1) writes ``<target>/<file>.in`` (LEaP input),
-          2) runs ``tleap`` (found via :func:`maws.tools.find_exe`),
-          3) moves the produced ``.prmtop``/``.inpcrd`` into
-             ``.maws_cache/<sha1>.{prmtop,inpcrd}``,
-          4) loads those cached files into OpenMM.
-        **No other methods write to disk**; geometry and MD are in-memory.
-
-    Cache key
-      The deterministic SHA1 covers:
-        - normalized ``build_string`` (whitespace collapsed),
-        - each chain's ``structure.init_string`` (whitespace removed),
-        - each chain's **canonical** sequence string (from ``Structure.translate``).
-      Identical inputs reuse the same cached build.
+    Container for Chain objects that builds AMBER topology and runs OpenMM simulations.
 
     Attributes
     ----------
-    build_string : str
-        LEaP preamble (typically a sequence of ``source ...`` lines).
-    prmtop : openmm.app.AmberPrmtopFile | None
-        Loaded AMBER topology after :meth:`build`.
-    inpcrd : openmm.app.AmberInpcrdFile | None
-        Loaded AMBER coordinates after :meth:`build`.
-    positions : list[openmm.Vec3] | None
-        Flat coordinate array over **all** chains, populated by :meth:`build`
-        or updated by geometry/MD methods. Length equals total atom count.
-    topology : openmm.app.Topology | None
-        OpenMM topology built from the AMBER files.
-    chains : list[:class:`maws.chain.Chain`]
+    chains : list[Chain]
         Chains in insertion order.
-    system : openmm.System | None
-        OpenMM system created from ``prmtop``.
-    integrator : openmm.Integrator | None
-        OpenMM integrator (default: Langevin).
+    positions : list[openmm.Vec3] | None
+        Flat coordinate array over all chains.
+    topology : openmm.app.Topology | None
+        OpenMM topology.
     simulation : openmm.app.Simulation | None
-        OpenMM Simulation object initialized on :meth:`build`.
-
-    Notes
-    -----
-    - Distances are Å and angles are radians unless stated otherwise.
-    - Cache directory: ``.maws_cache/`` with files ``<sha1>.prmtop`` and
-      ``<sha1>.inpcrd``.
+        OpenMM Simulation object.
     """
 
     def __init__(
@@ -237,6 +153,121 @@ class Complex:
         path = str(Path(pdb_path).resolve().parent)
         structure = Structure([pdb_name], residue_length=[length], residue_path=path)
         self.add_chain(pdb_name, structure)
+
+    # ---- Chain access convenience methods ----
+
+    def get_chain(self, index: int) -> Chain:
+        """
+        Return chain by index with bounds checking.
+
+        Parameters
+        ----------
+        index : int
+            Chain index (0-based). Negative indices work (Python-style).
+
+        Returns
+        -------
+        Chain
+            The chain at the given index.
+
+        Raises
+        ------
+        IndexError
+            If index is out of bounds.
+        """
+        if not self.chains:
+            raise IndexError("Complex has no chains")
+        return self.chains[index]
+
+    def aptamer_chain(self) -> Chain:
+        """
+        Convenience: return chain[0], typically the aptamer.
+
+        Returns
+        -------
+        Chain
+            The first chain, conventionally the aptamer in MAWS workflows.
+
+        Raises
+        ------
+        IndexError
+            If no chains exist.
+
+        Notes
+        -----
+        This is syntactic sugar for ``complex.chains[0]``. In MAWS, the
+        aptamer is always added first via :meth:`add_chain`.
+        """
+        return self.get_chain(0)
+
+    def ligand_chain(self) -> Chain:
+        """
+        Convenience: return chain[1], typically the ligand.
+
+        Returns
+        -------
+        Chain
+            The second chain, conventionally the ligand in MAWS workflows.
+
+        Raises
+        ------
+        IndexError
+            If fewer than two chains exist.
+
+        Notes
+        -----
+        This is syntactic sugar for ``complex.chains[1]``. In MAWS, the
+        ligand is typically added second via :meth:`add_chain_from_pdb`.
+        """
+        return self.get_chain(1)
+
+    # ------------------ Platform selection (CPU/GPU) ------------------------
+
+    def _create_simulation(self) -> app.Simulation:
+        """
+        Create OpenMM Simulation, preferring GPU if available.
+
+        Order of precedence:
+        1. MAWS_OPENMM_PLATFORM env var (if set)
+        2. CUDA (if available)
+        3. OpenCL (if available)
+        4. OpenMM default
+
+        Returns
+        -------
+        app.Simulation
+            Configured simulation object.
+        """
+
+        # Load plugins so GPU platforms are visible
+        mm.Platform.loadPluginsFromDirectory(mm.Platform.getDefaultPluginsDirectory())
+
+        # Check for user override via env var
+        env_platform = os.getenv("MAWS_OPENMM_PLATFORM")
+        if env_platform:
+            try:
+                platform = mm.Platform.getPlatformByName(env_platform)
+                return app.Simulation(
+                    self.topology, self.system, self.integrator, platform
+                )
+            except Exception:
+                pass  # Fall through to auto-detection
+
+        # Try GPU platforms in order
+        for name in ("CUDA", "OpenCL"):
+            try:
+                platform = mm.Platform.getPlatformByName(name)
+                return app.Simulation(
+                    self.topology, self.system, self.integrator, platform
+                )
+            except Exception as e:
+                warnings.warn(
+                    f"Platform '{name}' unavailable: {e}", RuntimeWarning, stacklevel=2
+                )
+                continue
+
+        # Let OpenMM choose (usually CPU)
+        return app.Simulation(self.topology, self.system, self.integrator)
 
     # LEaP + cache
 
@@ -364,9 +395,9 @@ class Complex:
             constraints=None,
             implicitSolvent=app.OBC1,
         )
-        self.simulation = app.Simulation(self.topology, self.system, self.integrator)
+        self.simulation = self._create_simulation()
 
-    # ---------------------------------  Geometry ops---------------
+    # ---------------------------------  Geometry ops  ------------------------------
 
     def rebuild(
         self,

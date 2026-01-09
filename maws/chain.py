@@ -1,4 +1,13 @@
-# maws/chain.py
+"""
+maws.chain
+==========
+
+A Chain is a lightweight view into a Complex's coordinate array.
+
+Each Chain tracks its slice of atoms and provides methods for sequence
+manipulation and per-residue rotations. Geometry is delegated to Complex.
+"""
+
 from __future__ import annotations
 
 import copy
@@ -11,55 +20,25 @@ if TYPE_CHECKING:
 
 class Chain:
     """
-    Representation of a single polymer chain inside a :class:`~maws.complex.Complex`.
+    A single polymer chain inside a Complex.
 
-    This class keeps sequence-related state (alias and canonical forms), per-residue
-    atom-offsets, and convenience helpers for applying rotations/translations to
-    either the whole chain or to sub-elements (torsions) defined in the
-    associated :class:`~maws.structure.Structure`.  **It does not own coordinates**;
-    geometric operations are delegated to the owning :class:`~maws.complex.Complex`,
-    which holds ``positions`` and the OpenMM machinery.
+    Manages sequence state and provides methods for per-residue rotations.
+    Geometry operations are delegated to the owning Complex.
 
     Attributes
     ----------
     id : int
-        Stable identifier for this chain within ``Complex.chains`` (0-based).
+        Chain index within Complex.chains.
     start : int
-        Global atom index (0-based) where this chain begins inside
-        ``Complex.positions`` (the complex stores all atoms from all chains in
-        one flat list).
-    start_history : int
-        Snapshot of the previous ``start`` used by :meth:`Complex.rebuild`
-        to splice old and new coordinate blocks correctly.
-    complex : Complex
-        Back-reference to the owning complex. All geometry is ultimately executed
-        on the complex since it owns ``positions``, ``topology``, etc.
-    residues_start : list[int]
-        Per-residue atom offsets **relative to** ``start``.  For residue lengths
-        ``[33, 31, 32]`` this becomes ``[0, 33, 64]``.
+        Global atom index where this chain begins.
     length : int
-        Total number of atoms in this chain (sum over per-residue atom counts
-        from ``Structure.residue_length``).
-    length_history : int
-        Snapshot of the previous ``length`` used during :meth:`Complex.rebuild`.
-    element : list[int]
-        Convenience triple ``[start_atom, bond_atom, end_atom_exclusive]`` used
-        for whole-chain transforms (``end`` is exclusive, like slicing).
+        Total atoms in this chain.
     structure : Structure
-        Template bank providing residue metadata and topology rules:
-        ``residue_length``, ``alias``, ``rotating_elements``, and ``connect``.
-    alias_sequence : str
-        Space-separated alias tokens (human-facing), e.g. ``"G A U"``.
+        Residue templates and topology rules.
     sequence : str
-        Space-separated canonical residue names used by LEaP, e.g. ``"G5 A U3"``.
-    sequence_array : list[str]
-        Tokenized canonical sequence (``sequence.split()``).
-    alias_sequence_array : list[str]
-        Tokenized alias sequence (``alias_sequence.split()``).
-    append_history : list[str]
-        Canonical residues appended on the right (3′) in the most recent edit.
-    prepend_history : list[str]
-        Canonical residues prepended on the left (5′) in the most recent edit.
+        Space-separated canonical residue names for LEaP.
+    alias_sequence : str
+        Space-separated alias tokens (human-readable).
     """
 
     def __init__(
@@ -392,7 +371,7 @@ class Chain:
 
             self.rotate_element(revised_element, angle, reverse=rev)
 
-    # ---- Compatibility helpers (historic indices) ---------------------------
+    # ---- Compatibility helpers---------------------------
 
     def rotate_historic_element(self, historic_element, angle: float):
         """
@@ -449,40 +428,3 @@ class Chain:
         """
         offset = len(self.prepend_history)
         self.rotate_in_residue(historic_index + offset, element_index, angle)
-
-    # ---- Whole-chain transforms (delegated) --------------------------------
-
-    def rotate_global(self, axis, angle: float):
-        """
-        Rotate the **entire chain** around a given axis by ``angle`` radians.
-
-        Parameters
-        ----------
-        axis : array-like or openmm.Vec3
-            Rotation axis (direction only matters; magnitude is ignored).
-        angle : float
-            Rotation angle in radians.
-
-        Notes
-        -----
-        Delegates to :meth:`Complex.rotate_global` using this chain's
-        ``element`` triple.
-        """
-        self.complex.rotate_global(self.element, axis, angle)
-
-    def translate_global(self, shift):
-        """
-        Translate the **entire chain** by a 3-vector.
-
-        Parameters
-        ----------
-        shift : array-like or openmm.unit.Quantity
-            Displacement vector. If given as a quantity, its unit should be
-            compatible with Ångström.
-
-        Notes
-        -----
-        Delegates to :meth:`Complex.translate_global` using this chain's
-        ``element`` triple.
-        """
-        self.complex.translate_global(self.element, shift)
