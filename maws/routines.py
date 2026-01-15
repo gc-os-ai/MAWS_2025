@@ -1,17 +1,53 @@
+"""
+maws.routines
+=============
+
+Thermodynamic scoring function for the MAWS aptamer selection algorithm.
+
+This module provides the entropy-based scoring function `S()` used to evaluate
+aptamer-ligand binding configurations via Boltzmann-weighted sampling.
+
+Functions
+---------
+S : Compute the entropy score from energy samples.
+
+Notes
+-----
+Uses `mpmath` for arbitrary-precision arithmetic to avoid numerical underflow
+when computing exponentials of large energy differences.
+
+Examples
+--------
+>>> from maws.routines import S
+>>> energies = [100.0, 150.0, 200.0, 175.0]
+>>> score = S(energies, beta=0.01)
+>>> hasattr(score, "__float__")  # S returns mpf (high-precision float)
+True
+"""
+
 import numpy as np
 from mpmath import mp as math
 
+# Set high precision for numerical stability with large energy ranges
 math.dps = 60
 
 
-def kullbackLeiblerDivergence(sample, reference_sample):
-    return -math.fsum(
-        np.asarray(sample)
-        * map(math.log, np.asarray(sample) / np.asarray(reference_sample))
-    )
+def _entropy(sample):
+    """
+    Compute Shannon entropy of a probability distribution.
 
+    Internal helper - use :func:`S` as the public API.
 
-def Entropy(sample):
+    Parameters
+    ----------
+    sample : iterable
+        Probability distribution P(x). Must sum to 1.
+
+    Returns
+    -------
+    mpf
+        Shannon entropy H = -sum(P * log(P * N)).
+    """
     sample = list(sample)
     return -math.fsum(
         map(
@@ -25,26 +61,28 @@ def Entropy(sample):
     )
 
 
-def GoodEnergy(energy, threshold):
-    if energy > threshold:
-        return -1.0
-    else:
-        return 1.0
+def _zps(sample, beta):
+    """
+    Compute partition function, probabilities, and entropy from energy samples.
 
+    Internal helper - use :func:`S` as the public API.
 
-# Score for optimization of both Energy and Entropy
-def Score(sample, beta):
-    return -S(sample, beta) * min(sample)
+    Parameters
+    ----------
+    sample : array-like
+        Energy values (kJ/mol) from conformational sampling.
+    beta : float
+        Inverse temperature parameter (1/kT in mol/kJ).
 
-
-# Score penalizing bad energies
-def ScoreThreshold(sample, beta, threshold):
-    result = S(sample, beta) * GoodEnergy(min(sample), threshold)
-    # print("ENTROPY: %s"%result)
-    return result
-
-
-def ZPS(sample, beta=0.01):
+    Returns
+    -------
+    Z : mpf
+        Partition function Z = sum(exp(-beta * E)).
+    P : iterator
+        Boltzmann probabilities P(i) = exp(-beta * E_i) / Z.
+    entropy : mpf
+        Shannon entropy of the Boltzmann distribution.
+    """
     Z = math.fsum(
         map(math.exp, map(math.fmul, [-beta] * len(sample), np.asarray(sample)))
     )
@@ -53,27 +91,36 @@ def ZPS(sample, beta=0.01):
         map(math.exp, map(math.fmul, [-beta] * len(sample), np.asarray(sample))),
         np.asarray([Z] * len(sample)),
     )
-    S = Entropy(P)
-    return Z, P, S
+    entropy = _entropy(P)
+    return Z, P, entropy
 
 
-def S(sample, beta=0.01):
-    # print("ENTROPY: %s"%ZPS(sample, beta)[2])
-    return ZPS(sample, beta)[2]
+def S(sample, beta=0.01):  # noqa: N802
+    """
+    Compute entropy score from energy samples.
 
+    This is the primary scoring function used in MAWS. The entropy measures
+    the "spread" of the Boltzmann distribution over sampled conformations.
+    Lower (more negative) entropy indicates a more peaked distribution,
+    suggesting stronger binding affinity.
 
-# choose the best set of positions by their free energies
-def best_position(self, positions_s, free_energies):
-    best_index = np.argsort(np.asarray(free_energies))
-    return positions_s[best_index[0]]
+    Parameters
+    ----------
+    sample : array-like
+        Energy values (kJ/mol) from conformational sampling.
+    beta : float, default=0.01
+        Inverse temperature parameter. Higher beta = sharper distribution.
 
+    Returns
+    -------
+    mpf
+        Entropy of the Boltzmann distribution over sampled energies.
 
-# choose complex candidates by their entropies
-def choose_candidates(self, entropies, sequences, threshold=0.0):
-    best_sequences = []
-    best_entropy_id = np.argsort(np.asarray(entropies))
-    best_entropy = entropies[best_entropy_id]
-    for index, entropy in enumerate(entropies):
-        if entropy <= best_entropy + threshold:
-            best_sequences.append(sequences[index])
-    return sequences
+    Examples
+    --------
+    >>> energies = [100.0, 150.0, 200.0]
+    >>> score = S(energies, beta=0.01)
+    >>> hasattr(score, "__float__")  # Returns mpf (high-precision)
+    True
+    """
+    return _zps(sample, beta)[2]
