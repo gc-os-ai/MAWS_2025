@@ -6,12 +6,23 @@ name: CI
 
 on:
   push:
+<<<<<<< HEAD
+=======
+    paths-ignore:
+      - "docs/**"
+>>>>>>> 76ac25b (modification in ci.yaml)
     branches:
       - main
   pull_request:
     branches:
       - main
+<<<<<<< HEAD
   workflow_dispatch:  # Allow manual trigger
+=======
+    paths-ignore:
+      - "docs/**"
+    types: [opened, synchronize]
+>>>>>>> 76ac25b (modification in ci.yaml)
 
 jobs:
   # ============================================================================
@@ -20,16 +31,16 @@ jobs:
   test:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    
+
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-    
+
     defaults:
       run:
-        shell: bash -el {0}  # Required for conda activate
-    
+        shell: bash -el {0} # Required for conda activate
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -85,7 +96,7 @@ jobs:
   unit-tests:
     name: Unit Tests Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    
+
     strategy:
       fail-fast: false
       matrix:
@@ -122,12 +133,12 @@ jobs:
     name: GPU Test
     runs-on: [self-hosted, gpu]
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[gpu]')
-    continue-on-error: true  # Don't fail the whole workflow if GPU tests fail
-    
+    continue-on-error: true # Don't fail the whole workflow if GPU tests fail
+
     defaults:
       run:
         shell: bash -el {0}
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -188,7 +199,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
