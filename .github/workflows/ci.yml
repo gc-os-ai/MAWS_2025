@@ -6,23 +6,12 @@ name: CI
 
 on:
   push:
-<<<<<<< HEAD
-=======
-    paths-ignore:
-      - "docs/**"
->>>>>>> 76ac25b (modification in ci.yaml)
     branches:
       - main
   pull_request:
     branches:
       - main
-<<<<<<< HEAD
-  workflow_dispatch:  # Allow manual trigger
-=======
-    paths-ignore:
-      - "docs/**"
-    types: [opened, synchronize]
->>>>>>> 76ac25b (modification in ci.yaml)
+  workflow_dispatch: # Allow manual trigger
 
 jobs:
   # ============================================================================
