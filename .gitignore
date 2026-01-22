@@ -92,13 +92,9 @@ dmypy.json
 cython_debug/
 
 #MAWS pdf files
-*.pdb
 .maws_cache/
 *.in
 *.mdp
-data/
-*.pdf
-*.png/ 
 *.log
 *.lib
 # We have to correct all this before release
