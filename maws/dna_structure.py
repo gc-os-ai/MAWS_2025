@@ -65,7 +65,8 @@ BACKBONE: list[tuple[str, int, int, int, int, int]] = [
 ]
 
 # 4) Rotations: (residue, start, bond, end_or_None)
-# Note: 'end' in XML becomes None here; negative indices are kept (normalized at runtime)
+# Note: 'end' in XML becomes None here;
+# negative indices are kept (normalized at runtime)
 ROTATIONS: list[tuple[str, int, int, int | None]] = [
     # DGN
     ("DGN", 0, 1, None),
@@ -149,8 +150,10 @@ ROTATIONS: list[tuple[str, int, int, int | None]] = [
     ("DC3", -4, -2, None),
 ]
 
-# 5) Connectivity: per residue: [[append_first, append_last], [prepend_last, prepend_first], append_len, prepend_len]
-# In this XML, all residues share the same connectivity (0,-1) and (-2,0) with bond lengths 1.6.
+# 5) Connectivity: per residue:
+# [[append_first, append_last], [prepend_last, prepend_first], append_len, prepend_len]
+# In this XML in previous verisons"
+# all residues share the same connectivity (0,-1) and (-2,0) with bond lengths 1.6.
 CONNECT: list[list] = [[[0, -1], [-2, 0], 1.6, 1.6] for _ in RESIDUE_NAMES]
 
 # 6) Alias table: [name, alone, start, middle, end]
