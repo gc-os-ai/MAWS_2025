@@ -3,6 +3,7 @@ channels:
   - conda-forge
   - bioconda
 <<<<<<< HEAD
+<<<<<<< HEAD
   - nodefaults
 dependencies:
   - python>=3.10
@@ -21,6 +22,10 @@ dev-dependencies:
 =======
   - defaults
 dependencies:
+=======
+  - defaults
+dependencies:
+>>>>>>> 0fbc9469c5c685a232892ee719bc05f89f25216f
   - python>=3.10,<3.14
   # Core scientific computing
   - numpy>=1.24
@@ -38,4 +43,7 @@ dependencies:
       - pytest>=8.0
       - pytest-cov
       - ruff>=0.12
+<<<<<<< HEAD
 >>>>>>> 2234e65 (Updating environment.yml)
+=======
+>>>>>>> 0fbc9469c5c685a232892ee719bc05f89f25216f
