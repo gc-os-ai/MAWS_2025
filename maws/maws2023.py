@@ -18,7 +18,7 @@ import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.helpers import center_of_mass, nostrom
-from maws.pdb_cleaner import clean_one_file
+from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
 
@@ -27,50 +27,6 @@ from maws.routines import S
 VERSION = "1.0"  # Siddharth
 RELEASE_DATE = "2025"  # Siddharth
 METHOD = "Kullback-Leibler"
-
-
-def _resolve_pdb_path(
-    pdb_path: str,
-    molecule_type: str,
-    *,
-    clean_pdb: bool,
-    keep_chains: str,
-    remove_h: bool,
-    drop_hetatm: bool,
-    logger: logging.Logger | None = None,
-) -> tuple[str, str]:
-    """
-    Decide the PDB path to use (possibly cleaned). Returns (final_path, original_path).
-
-    - Cleans only if `clean_pdb=True` AND `molecule_type == "protein"`.
-    - Logs to the provided logger if not None.
-    """
-    original = pdb_path
-    if not clean_pdb:
-        return pdb_path, original
-
-    if molecule_type != "protein":
-        if logger is not None:
-            logger.warning(
-                "--clean-pdb is intended for protein inputs; "
-                "skipping cleaning for non-protein types."
-            )
-        return pdb_path, original
-
-    try:
-        new_path = clean_one_file(
-            pdb_path,
-            keep=keep_chains,  # "all" | "one" | "A,B"
-            remove_h=remove_h,  # True/False
-            drop_hetatm=drop_hetatm,  # True/False
-        )
-        if logger is not None:
-            logger.info("Cleaned PDB written to: %s", new_path)
-        return new_path, original
-    except Exception as e:
-        if logger is not None:
-            logger.warning("PDB cleaning failed; using original file. Reason: %s", e)
-        return pdb_path, original
 
 
 def parse_args():
@@ -192,7 +148,7 @@ def main():
         logger.info("Job: %s", JOB_NAME)
 
         # Resolve (and optionally clean) the PDB before any LEaP calls
-        PDB_PATH, ORIGINAL_PDB_PATH = _resolve_pdb_path(
+        PDB_PATH, ORIGINAL_PDB_PATH = resolve_pdb_path(
             PDB_PATH,
             MOLECULE_TYPE,
             clean_pdb=args.clean_pdb,

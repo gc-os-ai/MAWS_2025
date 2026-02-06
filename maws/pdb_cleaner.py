@@ -28,6 +28,7 @@ Light modifications (2025): Siddharth
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Iterable, Sequence
@@ -557,7 +558,7 @@ def _resolve_altloc(pdb_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def clean_one_file(
+def _clean_one_file(
     input_path: str,
     keep: str = "all",
     remove_h: bool = False,
@@ -608,3 +609,47 @@ def clean_one_file(
     out_path = os.path.join(path, f"{stem}_cleaned.pdb")
     save_cleaned_pdb(out_path, pdb_df)
     return out_path
+
+
+def resolve_pdb_path(
+    pdb_path: str,
+    molecule_type: str,
+    *,
+    clean_pdb: bool,
+    keep_chains: str,
+    remove_h: bool,
+    drop_hetatm: bool,
+    logger: logging.Logger | None = None,
+) -> tuple[str, str]:
+    """
+    Decide the PDB path to use (possibly cleaned). Returns (final_path, original_path).
+
+    - Cleans only if `clean_pdb=True` AND `molecule_type == "protein"`.
+    - Logs to the provided logger if not None.
+    """
+    original = pdb_path
+    if not clean_pdb:
+        return pdb_path, original
+
+    if molecule_type != "protein":
+        if logger is not None:
+            logger.warning(
+                "--clean-pdb is intended for protein inputs; "
+                "skipping cleaning for non-protein types."
+            )
+        return pdb_path, original
+
+    try:
+        new_path = _clean_one_file(
+            pdb_path,
+            keep=keep_chains,  # "all" | "one" | "A,B"
+            remove_h=remove_h,  # True/False
+            drop_hetatm=drop_hetatm,  # True/False
+        )
+        if logger is not None:
+            logger.info("Cleaned PDB written to: %s", new_path)
+        return new_path, original
+    except Exception as e:
+        if logger is not None:
+            logger.warning("PDB cleaning failed; using original file. Reason: %s", e)
+        return pdb_path, original
