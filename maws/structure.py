@@ -11,6 +11,7 @@ and torsion definitions used by Chain and Complex.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import TypeAlias
 
 # Type aliases
@@ -69,11 +70,21 @@ class Structure:
         # LEaP bootstrap string (pairs of loadoff/loadamberparams)
         self.init_string: str = ""
         if self.residue_path is not None:
-            base = self.residue_path if self.residue_path != "" else "."
+            base = Path(self.residue_path) if self.residue_path != "" else Path(".")
+
             for name in self.residue_names:
-                self.init_string += (
-                    f"loadoff {base}/{name}.lib\nloadamberparams {base}/{name}.frcmod\n"
-                )
+                lib = base / f"{name}.lib"
+                frcmod = base / f"{name}.frcmod"
+
+                # lib is required if residue_path is set
+                if not lib.exists():
+                    raise FileNotFoundError(f"Missing LEaP library: {lib}")
+
+                self.init_string += f"loadoff {lib}\n"
+
+                # frcmod is optional (e.g., parameterized=True path)
+                if frcmod.exists():
+                    self.init_string += f"loadamberparams {frcmod}\n"
 
         # Map residue -> atom count (used to normalize negatives and report lengths)
         self.residue_length: dict[ResidueName, int] = {}
