@@ -163,8 +163,6 @@ class Structure:
         rotations : (int, int, int | None) or Iterable[tuple[int, int, int | None]]
             Either a single triple `[start, bond, end_or_None]`, or an iterable
             of such triples. Negative indices are allowed and normalized later.
-        basestring : type, optional
-            Ignored; kept for API compatibility with older code.
 
         Returns
         -------
