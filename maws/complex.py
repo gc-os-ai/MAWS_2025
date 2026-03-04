@@ -483,11 +483,10 @@ class Complex:
                     ][1][1]
                 ]
                 pre_bond_shift = (
-                    (chain.structure.connect[chain.prepend_history[-1]][2])
-                    * old_pre_vector
-                    / np.linalg.norm(np.asarray(nostrom(old_pre_vector)))
-                    - old_pre_vector
-                )
+                    chain.structure.connect[chain.prepend_history[-1]][2]
+                ) * old_pre_vector / np.linalg.norm(
+                    np.asarray(nostrom(old_pre_vector))
+                ) - old_pre_vector
                 for j in range(0, len(pos)):
                     roted = np.dot(np.array(pos[j].value_in_unit(unit.angstrom)), rot)
                     pos[j] = mm.Vec3(roted[0], roted[1], roted[2]) * unit.angstrom
@@ -505,7 +504,9 @@ class Complex:
             # ---- handle appended atoms ----
             if len(post_positions) != 0 and chain.append_history:
                 post_positions = self.positions[
-                    chain.start_history + chain.length_history - 1 : chain.start_history
+                    chain.start_history
+                    + chain.length_history
+                    - 1 : chain.start_history
                     + chain.length
                 ]
                 post_vector = (
@@ -558,11 +559,10 @@ class Complex:
                     pos[j] += shift_forward
 
                 post_bond_shift = (
-                    (chain.structure.connect[chain.append_history[0]][2])
-                    * old_post_vector
-                    / np.linalg.norm(np.asarray(nostrom(old_post_vector)))
-                    - old_post_vector
-                )
+                    chain.structure.connect[chain.append_history[0]][2]
+                ) * old_post_vector / np.linalg.norm(
+                    np.asarray(nostrom(old_post_vector))
+                ) - old_post_vector
                 shift_back = chain_positions[
                     chain.structure.connect[
                         chain.sequence_array[-len(chain.append_history)]

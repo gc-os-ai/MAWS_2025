@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: [3.10, 3.11, 3.12]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: maws
+          python-version: ${{ matrix.python }}
+          auto-update-conda: true
+          auto-activate-base: false
+      - name: Install additional Python packages
+        run: |
+          source $(conda info --base)/etc/profile.d/conda.sh
+          conda activate maws
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest nbformat nbconvert pre-commit
+      - name: Run pre-commit (formatting only)
+        continue-on-error: true
+        run: |
+          source $(conda info --base)/etc/profile.d/conda.sh
+          conda activate maws
+          pre-commit run --version
+          pre-commit run --all-files
+      - name: Run pytest
+        run: |
+          source $(conda info --base)/etc/profile.d/conda.sh
+          conda activate maws
+          python -m pytest -q
+      - name: Execute notebooks (redundant with pytest but explicit)
+        run: |
+          source $(conda info --base)/etc/profile.d/conda.sh
+          conda activate maws
+          python -m pytest tests/test_notebooks.py -q

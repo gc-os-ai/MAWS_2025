@@ -1,0 +1,8 @@
+numpy
+openmm
+numba
+jupyter
+nbformat
+nbconvert
+pytest
+pre-commit
