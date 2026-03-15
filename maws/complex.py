@@ -135,6 +135,8 @@ class Complex:
         self,
         force_field_aptamer: str = "leaprc.RNA.OL3",
         force_field_ligand: str = "leaprc.protein.ff19SB",
+        platform_name: str | None = None,
+        platform_properties: dict[str, str] | None = None,
     ):
         """
         Parameters
@@ -143,6 +145,10 @@ class Complex:
             LEaP ``source`` line for the nucleic-acid FF (e.g., RNA.OL3/DNA.OL21).
         force_field_ligand : str, default="leaprc.protein.ff19SB"
             LEaP ``source`` line for the ligand/protein/small-molecule FF.
+        platform_name : str | None, default=None
+            OpenMM platform name (e.g., "CUDA", "OpenCL", "Reference", "CPU").
+        platform_properties : dict[str, str] | None, default=None
+            Properties for the OpenMM platform (e.g., {"Precision": "mixed"}).
         """
         self.build_string = f"""
                             source {force_field_aptamer}
@@ -156,6 +162,8 @@ class Complex:
         self.system: mm.System | None = None
         self.integrator: mm.Integrator | None = None
         self.simulation: app.Simulation | None = None
+        self.platform_name = platform_name
+        self.platform_properties = platform_properties
 
     # Chains-------------------------------------
 
@@ -364,7 +372,19 @@ class Complex:
             constraints=None,
             implicitSolvent=app.OBC1,
         )
-        self.simulation = app.Simulation(self.topology, self.system, self.integrator)
+        
+        if self.platform_name is not None:
+            platform = mm.Platform.getPlatformByName(self.platform_name)
+            if self.platform_properties is not None:
+                self.simulation = app.Simulation(
+                    self.topology, self.system, self.integrator, platform, self.platform_properties
+                )
+            else:
+                self.simulation = app.Simulation(
+                    self.topology, self.system, self.integrator, platform
+                )
+        else:
+            self.simulation = app.Simulation(self.topology, self.system, self.integrator)
 
     # ---------------------------------  Geometry ops---------------
 

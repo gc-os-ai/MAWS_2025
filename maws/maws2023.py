@@ -8,6 +8,7 @@
 
 import argparse
 import copy
+import json
 from datetime import datetime
 
 import numpy as np
@@ -144,6 +145,18 @@ def parse_args():
         action="store_true",
         help="Cleaner: drop all HETATM records (NOT recommended for small molecules).",
     )
+    parser.add_argument(
+        "--platform",
+        type=str,
+        default=None,
+        help="OpenMM platform (e.g., CUDA, OpenCL, CPU, Reference).",
+    )
+    parser.add_argument(
+        "--platform-props",
+        type=str,
+        default=None,
+        help="JSON string with platform properties (e.g., '{\"Precision\": \"mixed\"}').",
+    )
     return parser.parse_args()
 
 
@@ -195,6 +208,14 @@ def main():
         output.write(f"Value of beta: {BETA}\n")
         output.write(f"Start time: {datetime.now()}\n")
 
+        platform_props = None
+        if args.platform_props:
+            platform_props = json.loads(args.platform_props)
+        if args.platform:
+            output.write(f"OpenMM Platform: {args.platform}\n")
+            if platform_props:
+                output.write(f"Platform Properties: {platform_props}\n")
+
         # Choose aptamer FF and residue
         if APTAMER_TYPE == "RNA":
             molecule = load_rna_structure()
@@ -226,6 +247,8 @@ def main():
         cpx = Complex(
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
+            platform_name=args.platform,
+            platform_properties=platform_props,
         )
         cpx.add_chain("", molecule)  # empty aptamer chain (sequence added later)
         cpx.add_chain_from_pdb(
@@ -239,6 +262,8 @@ def main():
         c = Complex(
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
+            platform_name=args.platform,
+            platform_properties=platform_props,
         )
         c.add_chain_from_pdb(
             pdb_path=PDB_PATH,
