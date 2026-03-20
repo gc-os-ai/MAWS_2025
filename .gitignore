@@ -42,18 +42,6 @@ htmlcov/
 *.mo
 *.pot
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
 
 # Sphinx documentation
 docs/_build/
@@ -104,7 +92,9 @@ dmypy.json
 cython_debug/
 
 #MAWS pdf files
-maws_*.pdb
 .maws_cache/
 *.in
 *.mdp
+*.log
+*.lib
+# We have to correct all this before release
