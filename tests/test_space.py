@@ -93,6 +93,26 @@ class TestSphere:
             distance = np.linalg.norm(pos)
             assert distance <= 10.0, f"Sample {pos} outside sphere radius"
 
+    def test_sphere_sample_offset_by_centre(self):
+        """Sphere samples are within radius of the (non-zero) centre, not the origin."""
+        centre = np.array([50.0, -30.0, 12.0])
+        sphere = Sphere(radius=10.0, centre=centre)
+        for _ in range(50):
+            sample = sphere.generator()
+            pos = np.array(sample[:3])
+            distance = np.linalg.norm(pos - centre)
+            assert distance <= 10.0 + 1e-9, (
+                f"Sample {pos} not within radius of centre {centre}"
+            )
+
+    def test_sphere_is_in_membership(self):
+        """Sphere.is_in() correctly accepts inside points and rejects outside ones."""
+        centre = np.array([10.0, 10.0, 10.0])
+        sphere = Sphere(radius=5.0, centre=centre)
+        assert bool(sphere.is_in(np.array([10.0, 10.0, 10.0])))
+        assert bool(sphere.is_in(np.array([13.0, 10.0, 10.0])))
+        assert not bool(sphere.is_in(np.array([100.0, 0.0, 0.0])))
+
 
 class TestSphericalShell:
     """Tests for SphericalShell sampling space."""
@@ -111,6 +131,18 @@ class TestSphericalShell:
             pos = np.array(sample[:3])
             distance = np.linalg.norm(pos)
             assert 5.0 <= distance <= 10.0, f"Sample {pos} outside shell bounds"
+
+    def test_shell_sample_offset_by_centre(self):
+        """SphericalShell samples sit in the shell measured from centre, not origin."""
+        centre = np.array([50.0, -30.0, 12.0])
+        shell = SphericalShell(innerRadius=5.0, outerRadius=10.0, centre=centre)
+        for _ in range(50):
+            sample = shell.generator()
+            pos = np.array(sample[:3])
+            distance = np.linalg.norm(pos - centre)
+            assert 5.0 - 1e-9 <= distance <= 10.0 + 1e-9, (
+                f"Sample {pos} outside shell of centre {centre}"
+            )
 
 
 class TestNAngles:

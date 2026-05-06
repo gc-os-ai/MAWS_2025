@@ -269,9 +269,9 @@ class Sphere(Space):
         rotation_angle = np.random.uniform(0, 2 * np.pi)
         result = np.array(
             [
-                r * np.cos(phi) * np.sin(psi),
-                r * np.sin(phi) * np.sin(psi),
-                r * np.cos(psi),
+                self.centre[0] + r * np.cos(phi) * np.sin(psi),
+                self.centre[1] + r * np.sin(phi) * np.sin(psi),
+                self.centre[2] + r * np.cos(psi),
                 x,
                 y,
                 z,
@@ -338,9 +338,9 @@ class SphericalShell(Space):
         rotation_angle = np.random.uniform(0, 2 * np.pi)
         result = np.array(
             [
-                r * np.cos(phi) * np.sin(psi),
-                r * np.sin(phi) * np.sin(psi),
-                r * np.cos(psi),
+                self.centre[0] + r * np.cos(phi) * np.sin(psi),
+                self.centre[1] + r * np.sin(phi) * np.sin(psi),
+                self.centre[2] + r * np.cos(psi),
                 x,
                 y,
                 z,
