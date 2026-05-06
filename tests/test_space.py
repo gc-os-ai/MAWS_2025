@@ -144,6 +144,48 @@ class TestSphericalShell:
                 f"Sample {pos} outside shell of centre {centre}"
             )
 
+    def test_shell_radial_distribution_is_uniform_in_volume(self):
+        """Shell sampling must be uniform per unit volume (∝ r²), not uniform in r.
+
+        For R_in=5, R_out=10 with the volume-correct CDF
+            r = (u·(R_out³ − R_in³) + R_in³)^(1/3),
+        E[r] = (3/4)·(R_out⁴ − R_in⁴)/(R_out³ − R_in³) ≈ 8.036.
+        A naive `r ~ Uniform(R_in, R_out)` gives E[r] = 7.5 — well outside
+        the statistical band of the correct sampler at N=10_000.
+        """
+        rng = np.random.default_rng(0)
+        np.random.seed(0)  # generator() uses np.random
+        R_in, R_out = 5.0, 10.0
+        shell = SphericalShell(innerRadius=R_in, outerRadius=R_out, centre=[0, 0, 0])
+        radii = np.array([np.linalg.norm(shell.generator()[:3]) for _ in range(10_000)])
+        expected = (3 / 4) * (R_out**4 - R_in**4) / (R_out**3 - R_in**3)
+        # Tight band: correct sampler lands within ~0.05 of 8.036; biased
+        # sampler is at 7.5, well outside this band.
+        assert abs(radii.mean() - expected) < 0.1, (
+            f"E[r] = {radii.mean():.3f}, expected ~{expected:.3f} (uniform-in-r bias?)"
+        )
+        _ = rng  # silence unused
+
+    def test_shell_direction_is_uniform_on_sphere(self):
+        """Shell directions must be uniform on the sphere (E[z²/r²] = 1/3).
+
+        With `psi ~ Uniform(0, π)` the polar angle is biased toward the
+        poles, giving E[cos²(psi)] = 1/2 instead of 1/3.
+        """
+        np.random.seed(1)
+        R_in, R_out = 5.0, 10.0
+        shell = SphericalShell(innerRadius=R_in, outerRadius=R_out, centre=[0, 0, 0])
+        samples = np.array([shell.generator()[:3] for _ in range(10_000)])
+        # Direction vectors (unit), then mean of z²
+        radii = np.linalg.norm(samples, axis=1, keepdims=True)
+        unit_z = (samples / radii)[:, 2]
+        mean_z2 = float((unit_z**2).mean())
+        # Uniform-on-sphere: 1/3 ≈ 0.333. Biased: 1/2 = 0.500. Tolerance
+        # 0.04 cleanly separates the two at N=10_000.
+        assert abs(mean_z2 - 1 / 3) < 0.04, (
+            f"E[(z/r)²] = {mean_z2:.3f}, expected ~0.333 (polar-angle bias?)"
+        )
+
 
 class TestNAngles:
     """Tests for NAngles (torsion angle) sampling space."""
