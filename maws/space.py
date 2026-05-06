@@ -269,9 +269,9 @@ class Sphere(Space):
         rotation_angle = np.random.uniform(0, 2 * np.pi)
         result = np.array(
             [
-                r * np.cos(phi) * np.sin(psi),
-                r * np.sin(phi) * np.sin(psi),
-                r * np.cos(psi),
+                self.centre[0] + r * np.cos(phi) * np.sin(psi),
+                self.centre[1] + r * np.sin(phi) * np.sin(psi),
+                self.centre[2] + r * np.cos(psi),
                 x,
                 y,
                 z,
@@ -332,15 +332,21 @@ class SphericalShell(Space):
         """
         axis = np.random.uniform(-1, 1, 3)
         x, y, z = axis / np.linalg.norm(axis)
-        r = np.random.uniform(self.innerRadius, self.outerRadius)
+        # Uniform-in-volume radial sampling: r ~ (u·(R_out³ − R_in³) + R_in³)^(1/3)
+        u = np.random.uniform(0, 1)
+        r = (u * (self.outerRadius**3 - self.innerRadius**3) + self.innerRadius**3) ** (
+            1 / 3
+        )
         phi = np.random.uniform(0, 2 * np.pi)
-        psi = np.random.uniform(0, np.pi)
+        # Uniform direction on the sphere: cos(psi) uniform in [-1, 1]
+        cos_psi = np.random.uniform(-1, 1)
+        psi = np.arccos(cos_psi)
         rotation_angle = np.random.uniform(0, 2 * np.pi)
         result = np.array(
             [
-                r * np.cos(phi) * np.sin(psi),
-                r * np.sin(phi) * np.sin(psi),
-                r * np.cos(psi),
+                self.centre[0] + r * np.cos(phi) * np.sin(psi),
+                self.centre[1] + r * np.sin(phi) * np.sin(psi),
+                self.centre[2] + r * np.cos(psi),
                 x,
                 y,
                 z,
