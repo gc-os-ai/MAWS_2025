@@ -79,3 +79,25 @@ def test_maws_runner_each_shape(tmp_path: Path, shape: str) -> None:
     result = runner.run(pdb=pdb, name=f"test_{shape}", output_pdb=out_dir)
     assert isinstance(result, MawsResult)
     assert isinstance(result.sequence, str) and result.sequence.strip() != ""
+
+
+def test_runner_rejects_negative_reach() -> None:
+    """MawsRunner raises ValueError on negative reach (no integration setup needed)."""
+    with pytest.raises(ValueError, match="reach must be >= 0"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            reach=-1.0,
+        )
+
+
+def test_runner_rejects_negative_probe() -> None:
+    """MawsRunner raises ValueError on negative probe (no integration setup needed)."""
+    with pytest.raises(ValueError, match="probe must be >= 0"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            probe=-1.0,
+        )

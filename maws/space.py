@@ -13,8 +13,8 @@ SAS-style Bondi-vdW + probe check.
 Public API
 ----------
 Cube, Sphere, Shell : frozen dataclasses
-    Geometric envelopes; each ``.generator()`` returns a 7-element ndarray
-    ``[x, y, z, axis_x, axis_y, axis_z, rotation_angle]``.
+    Geometric envelopes; each ``.generator()`` returns a :class:`Sample`
+    (``position``, ``axis``, ``angle``).
 NAngles : frozen dataclass
     N independent angles in [0, 2π) for in-residue rotations.
 Excluder
@@ -82,6 +82,13 @@ _BONDI_VDW_RADII: dict[str, float] = {
 }
 # Carbon-equivalent fallback for unknown elements.
 _DEFAULT_VDW = 1.70
+
+# Shell inner-radius slack: how much we shrink R_min before using it as the
+# shell's inner radius. Roughly one nucleotide of clearance (~6 Å) rounded
+# down, so the inner sphere stays comfortably inside the bulk and doesn't
+# clip pocket walls. Hardcoded rather than a CLI flag — empirically robust;
+# tune in code if you have a reason.
+_SHELL_INNER_BUFFER = 5.0
 
 
 @dataclass(frozen=True)
@@ -249,7 +256,7 @@ _DIM_FORMULAS: dict = {
         "centre": com,
     },
     "shell": lambda R_max, R_min, com, reach: {
-        "inner": max(0.0, R_min - 5.0),
+        "inner": max(0.0, R_min - _SHELL_INNER_BUFFER),
         "outer": R_max + reach,
         "centre": com,
     },
@@ -309,7 +316,7 @@ class SurfaceSampler:
     Parameters
     ----------
     envelope
-        Any object with `.generator() -> 7-element ndarray` (Cube / Sphere / Shell).
+        Any object with `.generator() -> Sample` (Cube / Sphere / Shell).
     excluder
         Excluder instance.
     max_rejections : int
@@ -371,6 +378,10 @@ def make_sampler(
         raise ValueError(
             f"Unknown shape {shape!r}; expected one of {list(_ENVELOPE_TYPES)}."
         )
+    if reach < 0:
+        raise ValueError(f"reach must be >= 0, got {reach}")
+    if probe < 0:
+        raise ValueError(f"probe must be >= 0, got {probe}")
     dims = compute_envelope_dims(complex_obj, shape, reach)
     envelope = cls(**dims)
     excluder = Excluder(complex_obj, probe=probe)

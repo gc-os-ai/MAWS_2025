@@ -66,6 +66,10 @@ class MawsRunner:
             raise ValueError("num_nucleotides couldn't be less than 0")
         if first_chunck_size <= 0 or second_chunck_size <= 0:
             raise ValueError("Chunck size must be greater than 0")
+        if reach < 0:
+            raise ValueError(f"reach must be >= 0, got {reach}")
+        if probe < 0:
+            raise ValueError(f"probe must be >= 0, got {probe}")
 
         self.num_nucleotides = num_nucleotides
         self.aptamer_type = aptamer_type

@@ -283,6 +283,46 @@ class TestComputeEnvelopeDims:
         with pytest.raises(ValueError, match="cube|sphere|shell"):
             compute_envelope_dims(synthetic_octahedron_complex, "blob", reach=10.0)
 
+    def test_shell_dims_when_rmin_lt_rmax(self, synthetic_elongated_complex):
+        """For an elongated ligand, shell inner uses R_min - buffer (not R_max)."""
+        from maws.space import _SHELL_INNER_BUFFER, compute_envelope_dims
+
+        d = compute_envelope_dims(synthetic_elongated_complex, "shell", reach=10.0)
+        # Geometry: COM = origin (symmetric), R_min = 2, R_max = 20.
+        # Expected: outer = 20 + 10 = 30; inner = max(0, 2 - buffer) = 0
+        # (since buffer = 5 Å > R_min); centre = origin.
+        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
+        assert d["outer"] == 30.0
+        assert d["inner"] == max(0.0, 2.0 - _SHELL_INNER_BUFFER)
+        assert d["inner"] < d["outer"]  # the meaningful contract
+
+    def test_shell_dims_when_rmin_exceeds_buffer(self, synthetic_two_far_carbons):
+        """When R_min > buffer the inner radius is non-trivial."""
+        from maws.space import _SHELL_INNER_BUFFER, compute_envelope_dims
+
+        d = compute_envelope_dims(synthetic_two_far_carbons, "shell", reach=10.0)
+        # R_min = R_max = 12 > buffer = 5 → inner = 12 - 5 = 7, outer = 12 + 10 = 22
+        assert d["inner"] == 12.0 - _SHELL_INNER_BUFFER
+        assert d["outer"] == 22.0
+
+
+class TestMakeSamplerValidation:
+    def test_rejects_negative_reach(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="reach must be >= 0"):
+            make_sampler("shell", synthetic_octahedron_complex, reach=-1.0)
+
+    def test_rejects_negative_probe(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="probe must be >= 0"):
+            make_sampler("shell", synthetic_octahedron_complex, probe=-1.0)
+
 
 class TestSurfaceSampler:
     def test_all_samples_clear(self, synthetic_octahedron_complex):

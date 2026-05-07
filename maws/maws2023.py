@@ -27,6 +27,14 @@ RELEASE_DATE = "2025"  # Siddharth
 METHOD = "Kullback-Leibler"
 
 
+def _non_negative_float(s: str) -> float:
+    """argparse `type=` validator that rejects negative floats."""
+    v = float(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {v}")
+    return v
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="MAWS - Making Aptamers With Software")
     parser.add_argument(
@@ -106,13 +114,13 @@ def parse_args():
     )
     parser.add_argument(
         "--reach",
-        type=float,
+        type=_non_negative_float,
         default=10.0,
         help="How far the envelope extends beyond the ligand surface (Å). Default: 10.",
     )
     parser.add_argument(
         "--probe",
-        type=float,
+        type=_non_negative_float,
         default=1.4,
         help="vdW probe radius for SAS rejection (Å). Default: 1.4 (water-like).",
     )
