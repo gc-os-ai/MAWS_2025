@@ -101,3 +101,6 @@ cython_debug/
 
 # Local Claude harness
 .claude/
+
+# Cleaned PDBs generated on demand by the pdb_cleaner — not source data.
+data/*_cleaned.pdb
