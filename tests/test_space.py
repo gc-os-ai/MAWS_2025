@@ -279,3 +279,29 @@ class TestComputeEnvelopeDims:
 
         with pytest.raises(ValueError, match="cube|sphere|shell"):
             compute_envelope_dims(synthetic_octahedron_complex, "blob", reach=10.0)
+
+
+class TestSurfaceSampler:
+    def test_all_samples_clear(self, synthetic_octahedron_complex):
+        from maws.space import Excluder, Sphere, SurfaceSampler
+
+        envelope = Sphere(radius=15.0, centre=np.array([0.0, 0.0, 0.0]))
+        excluder = Excluder(synthetic_octahedron_complex, probe=1.4)
+        sampler = SurfaceSampler(envelope=envelope, excluder=excluder)
+        for _ in range(50):
+            sample = sampler.generator()
+            assert excluder.is_clear(sample[:3])
+
+    def test_raises_when_envelope_buried(self, synthetic_two_carbon_complex):
+        """A Cube of width 0.1 sitting on an atom is fully blocked."""
+        import pytest
+
+        from maws.space import Cube, Excluder, SamplingError, SurfaceSampler
+
+        envelope = Cube(width=0.1, centre=np.array([0.0, 0.0, 0.0]))
+        excluder = Excluder(synthetic_two_carbon_complex, probe=1.4)
+        sampler = SurfaceSampler(
+            envelope=envelope, excluder=excluder, max_rejections=20
+        )
+        with pytest.raises(SamplingError, match="buried|reach|probe"):
+            sampler.generator()

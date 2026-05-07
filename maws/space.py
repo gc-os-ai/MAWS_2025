@@ -275,3 +275,38 @@ def compute_envelope_dims(complex_obj, shape: str, reach: float) -> dict:
             "centre": com,
         }
     raise ValueError(f"Unknown shape {shape!r}; expected one of cube / sphere / shell.")
+
+
+class SamplingError(RuntimeError):
+    """Raised when SurfaceSampler cannot find a clear point in max_rejections tries."""
+
+
+@dataclass
+class SurfaceSampler:
+    """
+    Rejection sampler: draws from `envelope` until `excluder.is_clear` accepts.
+
+    Parameters
+    ----------
+    envelope
+        Any object with `.generator() -> 7-element ndarray` (Cube / Sphere / Shell).
+    excluder
+        Excluder instance.
+    max_rejections : int
+        Safety cap to fail fast on misconfigured envelopes.
+    """
+
+    envelope: Envelope
+    excluder: Excluder
+    max_rejections: int = 1000
+
+    def generator(self) -> np.ndarray:
+        for _ in range(self.max_rejections):
+            sample = self.envelope.generator()
+            if self.excluder.is_clear(sample[:3]):
+                return sample
+        raise SamplingError(
+            f"Could not draw a clear point in {self.max_rejections} attempts. "
+            f"Envelope may be fully buried — increase --reach, decrease --probe, "
+            f"or check ligand size."
+        )
