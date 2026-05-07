@@ -244,3 +244,38 @@ class TestExcluder:
         )
         # Touch the unused-but-meaningful default to silence linters
         assert _DEFAULT_VDW == 1.70
+
+
+class TestComputeEnvelopeDims:
+    def test_cube_dims_octahedron(self, synthetic_octahedron_complex):
+        from maws.space import compute_envelope_dims
+
+        d = compute_envelope_dims(synthetic_octahedron_complex, "cube", reach=10.0)
+        # COM = origin; R_max = 5.0; width = 2*(5+10) = 30
+        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
+        assert d["width"] == 30.0
+
+    def test_sphere_dims_octahedron(self, synthetic_octahedron_complex):
+        from maws.space import compute_envelope_dims
+
+        d = compute_envelope_dims(synthetic_octahedron_complex, "sphere", reach=10.0)
+        # radius = R_max + reach = 15.0
+        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
+        assert d["radius"] == 15.0
+
+    def test_shell_dims_octahedron(self, synthetic_octahedron_complex):
+        from maws.space import compute_envelope_dims
+
+        d = compute_envelope_dims(synthetic_octahedron_complex, "shell", reach=10.0)
+        # R_min = R_max = 5.0 (octahedron); inner = max(0, 5 - 5) = 0; outer = 15
+        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
+        assert d["inner"] == 0.0
+        assert d["outer"] == 15.0
+
+    def test_unknown_shape_raises(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import compute_envelope_dims
+
+        with pytest.raises(ValueError, match="cube|sphere|shell"):
+            compute_envelope_dims(synthetic_octahedron_complex, "blob", reach=10.0)

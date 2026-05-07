@@ -34,7 +34,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+from openmm import unit
 from scipy.spatial import KDTree
+
+from maws.helpers import mass_weighted_center, nostrom
 
 # ============================================================================
 # Surface-aware sampling — public API
@@ -194,8 +197,6 @@ class Excluder:
     _warned: set[str] = set()
 
     def __init__(self, complex_obj, probe: float = 1.4):
-        from maws.helpers import nostrom
-
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
         radii = np.empty(len(positions), dtype=float)
         for i, atom in enumerate(complex_obj.topology.atoms):
@@ -206,7 +207,7 @@ class Excluder:
                 if sym not in Excluder._warned:
                     Excluder._warned.add(sym)
                     warnings.warn(
-                        f"Unknown element {sym!r} — using fallback "
+                        f"Unknown element {sym!r} - using fallback "
                         f"vdW = {_DEFAULT_VDW} Å",
                         RuntimeWarning,
                         stacklevel=2,
@@ -225,3 +226,52 @@ class Excluder:
         diffs = self._positions[idx] - np.asarray(point)
         dists2 = (diffs**2).sum(axis=1)
         return bool((dists2 > self._inflated[idx] ** 2).all())
+
+
+def compute_envelope_dims(complex_obj, shape: str, reach: float) -> dict:
+    """
+    Compute auto-sized envelope dimensions from the ligand atoms.
+
+    Parameters
+    ----------
+    complex_obj
+        Object with `.positions` (Quantity) and `.topology.atoms` (yielding
+        atoms with `.element.mass`).
+    shape : {"cube", "sphere", "shell"}
+        Envelope shape.
+    reach : float
+        Aptamer reach beyond the surface (Å).
+
+    Returns
+    -------
+    dict
+        Kwargs suitable for the matching envelope dataclass:
+          cube   → {"width", "centre"}
+          sphere → {"radius", "centre"}
+          shell  → {"inner", "outer", "centre"}
+    """
+    pos = np.asarray(nostrom(complex_obj.positions), dtype=float)
+
+    def _mass(atom):
+        m = atom.element.mass
+        if hasattr(m, "value_in_unit"):
+            return m.value_in_unit(unit.dalton)
+        return float(m)
+
+    masses = np.array([_mass(a) for a in complex_obj.topology.atoms], dtype=float)
+    com = mass_weighted_center(pos, masses)
+    dists = np.linalg.norm(pos - com, axis=1)
+    R_max = float(dists.max())
+    R_min = float(dists.min())
+
+    if shape == "cube":
+        return {"width": 2.0 * (R_max + reach), "centre": com}
+    if shape == "sphere":
+        return {"radius": R_max + reach, "centre": com}
+    if shape == "shell":
+        return {
+            "inner": max(0.0, R_min - 5.0),
+            "outer": R_max + reach,
+            "centre": com,
+        }
+    raise ValueError(f"Unknown shape {shape!r}; expected one of cube / sphere / shell.")
