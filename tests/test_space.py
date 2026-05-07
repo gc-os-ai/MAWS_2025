@@ -139,3 +139,50 @@ class TestSphere:
         rs = np.linalg.norm(samples, axis=1, keepdims=True)
         unit_z = (samples / rs)[:, 2]
         assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
+
+
+class TestShell:
+    def test_generator_returns_7_elements(self):
+        from maws.space import Shell
+
+        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
+        assert len(sh.generator()) == 7
+
+    def test_generator_within_shell_at_origin(self):
+        from maws.space import Shell
+
+        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
+        for _ in range(50):
+            sample = sh.generator()
+            r = np.linalg.norm(sample[:3])
+            assert 5.0 - 1e-9 <= r <= 10.0 + 1e-9
+
+    def test_generator_offset_by_centre(self):
+        from maws.space import Shell
+
+        centre = np.array([50.0, -30.0, 12.0])
+        sh = Shell(inner=5.0, outer=10.0, centre=centre)
+        for _ in range(50):
+            sample = sh.generator()
+            r = np.linalg.norm(sample[:3] - centre)
+            assert 5.0 - 1e-9 <= r <= 10.0 + 1e-9
+
+    def test_radial_distribution_uniform_in_volume(self):
+        """E[r] = (3/4)·(R_out^4 - R_in^4)/(R_out^3 - R_in^3) ≈ 8.036 for [5, 10]."""
+        from maws.space import Shell
+
+        np.random.seed(0)
+        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
+        rs = np.array([np.linalg.norm(sh.generator()[:3]) for _ in range(10_000)])
+        expected = (3 / 4) * (10**4 - 5**4) / (10**3 - 5**3)
+        assert abs(rs.mean() - expected) < 0.1
+
+    def test_direction_uniform_on_sphere(self):
+        from maws.space import Shell
+
+        np.random.seed(1)
+        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
+        samples = np.array([sh.generator()[:3] for _ in range(10_000)])
+        rs = np.linalg.norm(samples, axis=1, keepdims=True)
+        unit_z = (samples / rs)[:, 2]
+        assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
