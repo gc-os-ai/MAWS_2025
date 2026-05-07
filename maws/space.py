@@ -307,6 +307,45 @@ class SurfaceSampler:
                 return sample
         raise SamplingError(
             f"Could not draw a clear point in {self.max_rejections} attempts. "
-            f"Envelope may be fully buried — increase --reach, decrease --probe, "
+            f"Envelope may be fully buried - increase --reach, decrease --probe, "
             f"or check ligand size."
         )
+
+
+def make_sampler(
+    shape: str,
+    complex_obj,
+    *,
+    reach: float = 10.0,
+    probe: float = 1.4,
+) -> SurfaceSampler:
+    """
+    Build a fully-configured surface-aware sampler for `complex_obj`.
+
+    Parameters
+    ----------
+    shape : {"cube", "sphere", "shell"}
+        Envelope shape (auto-sized from `complex_obj`).
+    complex_obj
+        Built ligand-only Complex (positions + topology).
+    reach : float, default 10.0
+        Distance the envelope extends beyond the ligand surface (Å).
+    probe : float, default 1.4
+        vdW probe radius for SAS rejection (Å). Water-like at the default.
+
+    Returns
+    -------
+    SurfaceSampler
+    """
+    dims = compute_envelope_dims(complex_obj, shape, reach)
+    if shape == "cube":
+        envelope: Envelope = Cube(**dims)
+    elif shape == "sphere":
+        envelope = Sphere(**dims)
+    elif shape == "shell":
+        envelope = Shell(**dims)
+    else:
+        # compute_envelope_dims would have raised first, but be defensive.
+        raise ValueError(f"Unknown shape {shape!r}")
+    excluder = Excluder(complex_obj, probe=probe)
+    return SurfaceSampler(envelope=envelope, excluder=excluder)

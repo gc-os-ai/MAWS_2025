@@ -305,3 +305,48 @@ class TestSurfaceSampler:
         )
         with pytest.raises(SamplingError, match="buried|reach|probe"):
             sampler.generator()
+
+
+class TestMakeSampler:
+    def test_returns_surface_sampler(self, synthetic_octahedron_complex):
+        from maws.space import SurfaceSampler, make_sampler
+
+        s = make_sampler("shell", synthetic_octahedron_complex, reach=10.0, probe=1.4)
+        assert isinstance(s, SurfaceSampler)
+
+    def test_chooses_correct_envelope_per_shape(self, synthetic_octahedron_complex):
+        from maws.space import Cube, Shell, Sphere, make_sampler
+
+        assert isinstance(
+            make_sampler("cube", synthetic_octahedron_complex).envelope, Cube
+        )
+        assert isinstance(
+            make_sampler("sphere", synthetic_octahedron_complex).envelope, Sphere
+        )
+        assert isinstance(
+            make_sampler("shell", synthetic_octahedron_complex).envelope, Shell
+        )
+
+    def test_rejects_unknown_shape(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="cube|sphere|shell"):
+            make_sampler("blob", synthetic_octahedron_complex)
+
+    def test_passes_dims_through(self, synthetic_octahedron_complex):
+        """For the octahedron with reach=10, sphere radius should be 15."""
+        from maws.space import make_sampler
+
+        s = make_sampler("sphere", synthetic_octahedron_complex, reach=10.0)
+        assert s.envelope.radius == 15.0
+
+    def test_returns_clear_samples(self, synthetic_octahedron_complex):
+        from maws.space import make_sampler
+
+        np.random.seed(0)
+        s = make_sampler("shell", synthetic_octahedron_complex)
+        for _ in range(20):
+            sample = s.generator()
+            assert s.excluder.is_clear(sample[:3])
