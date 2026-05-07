@@ -2,29 +2,36 @@
 maws.space
 ==========
 
-Sampling spaces for molecular conformational exploration.
+Surface-aware sampling for the MAWS aptamer-design loop.
 
-This module defines geometric spaces from which MAWS samples configurations
-(positions + orientations) during aptamer-ligand binding evaluation.
+The intended public entry point is :func:`make_sampler`. It picks the
+envelope shape, auto-sizes it from the ligand atoms (mass-weighted COM,
+bounding radii), and wraps the result in a :class:`SurfaceSampler` whose
+``.generator()`` rejects candidate poses inside the protein bulk via an
+SAS-style Bondi-vdW + probe check.
 
-Classes
--------
-Space : Base class for sampling spaces.
-Box : Rectangular 3D sampling volume.
-Cube : Cubic 3D sampling volume (special case of Box).
-Sphere : Spherical 3D sampling volume.
-SphericalShell : Hollow sphere sampling volume.
-NAngles : N-dimensional torsion angle space.
+Public API
+----------
+Cube, Sphere, Shell : frozen dataclasses
+    Geometric envelopes; each ``.generator()`` returns a 7-element ndarray
+    ``[x, y, z, axis_x, axis_y, axis_z, rotation_angle]``.
+NAngles : frozen dataclass
+    N independent angles in [0, 2π) for in-residue rotations.
+Excluder
+    KDTree-backed SAS rejection: a candidate is "clear" iff its distance
+    to every ligand atom exceeds (Bondi vdW + probe).
+SurfaceSampler
+    Composes an envelope + an Excluder into a rejection sampler.
+make_sampler(shape, complex_obj, *, reach=10.0, probe=1.4)
+    Factory: builds envelope + Excluder for the given Complex.
+compute_envelope_dims(complex_obj, shape, reach)
+    Returns the kwargs for the matching envelope dataclass; useful
+    in tests and notebooks.
 
 Examples
 --------
->>> import numpy as np
 >>> from maws.space import NAngles
-
-Create a 4-angle torsion space:
-
->>> angles = NAngles(4)
->>> sample = angles.generator()
+>>> sample = NAngles(n=4).generator()
 >>> len(sample)
 4
 """
