@@ -312,6 +312,15 @@ class SurfaceSampler:
         )
 
 
+# Single source of truth for supported shapes — used by both make_sampler
+# (envelope construction) and compute_envelope_dims (validation).
+_ENVELOPE_TYPES: dict[str, type] = {
+    "cube": Cube,
+    "sphere": Sphere,
+    "shell": Shell,
+}
+
+
 def make_sampler(
     shape: str,
     complex_obj,
@@ -337,15 +346,12 @@ def make_sampler(
     -------
     SurfaceSampler
     """
+    cls = _ENVELOPE_TYPES.get(shape)
+    if cls is None:
+        raise ValueError(
+            f"Unknown shape {shape!r}; expected one of {list(_ENVELOPE_TYPES)}."
+        )
     dims = compute_envelope_dims(complex_obj, shape, reach)
-    if shape == "cube":
-        envelope: Envelope = Cube(**dims)
-    elif shape == "sphere":
-        envelope = Sphere(**dims)
-    elif shape == "shell":
-        envelope = Shell(**dims)
-    else:
-        # compute_envelope_dims would have raised first, but be defensive.
-        raise ValueError(f"Unknown shape {shape!r}")
+    envelope = cls(**dims)
     excluder = Excluder(complex_obj, probe=probe)
     return SurfaceSampler(envelope=envelope, excluder=excluder)
