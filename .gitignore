@@ -98,3 +98,6 @@ cython_debug/
 *.log
 *.lib
 # We have to correct all this before release
+
+# Local Claude harness
+.claude/
