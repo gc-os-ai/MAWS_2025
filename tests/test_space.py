@@ -19,13 +19,13 @@ class TestNAngles:
 
     def test_nangles_generator_returns_n_elements(self):
         """NAngles.generator() returns array of N angles."""
-        angles = NAngles(number=4)
+        angles = NAngles(n=4)
         sample = angles.generator()
         assert len(sample) == 4
 
     def test_nangles_in_range(self):
         """NAngles samples are in [0, 2π)."""
-        angles = NAngles(number=5)
+        angles = NAngles(n=5)
         for _ in range(10):
             sample = angles.generator()
             for angle in sample:
@@ -34,9 +34,18 @@ class TestNAngles:
     def test_nangles_different_counts(self):
         """NAngles works for various N values."""
         for n in [1, 3, 10]:
-            angles = NAngles(number=n)
+            angles = NAngles(n=n)
             sample = angles.generator()
             assert len(sample) == n
+
+    def test_nangles_is_frozen_dataclass(self):
+        a = NAngles(n=3)
+        try:
+            a.n = 5
+        except Exception as e:
+            assert "frozen" in str(e).lower() or "FrozenInstance" in type(e).__name__
+            return
+        raise AssertionError("expected FrozenInstanceError on attribute assignment")
 
 
 # ---------- New surface-aware sampler tests ----------
