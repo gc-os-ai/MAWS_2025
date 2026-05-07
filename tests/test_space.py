@@ -11,7 +11,9 @@ Surface-aware sampling primitives:
 
 import math
 
-from maws.space import NAngles
+import numpy as np
+
+from maws.space import _BONDI_VDW_RADII, _DEFAULT_VDW, Cube, NAngles
 
 
 class TestNAngles:
@@ -50,10 +52,6 @@ class TestNAngles:
 
 # ---------- New surface-aware sampler tests ----------
 
-import numpy as np  # noqa: E402
-
-from maws.space import _BONDI_VDW_RADII, _DEFAULT_VDW, Cube  # noqa: E402
-
 
 class TestBondiTable:
     def test_has_common_biological_elements(self):
@@ -69,30 +67,35 @@ class TestBondiTable:
 
 
 class TestCube:
-    def test_generator_returns_7_elements(self):
+    def test_generator_returns_sample(self):
+        from maws.space import Sample
+
         c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        assert len(c.generator()) == 7
+        s = c.generator()
+        assert isinstance(s, Sample)
+        assert s.position.shape == (3,)
+        assert s.axis.shape == (3,)
+        assert isinstance(s.angle, float)
 
     def test_generator_position_within_bounds(self):
         c = Cube(width=10.0, centre=np.array([5.0, 5.0, 5.0]))
         for _ in range(50):
             s = c.generator()
-            assert 0.0 <= s[0] <= 10.0
-            assert 0.0 <= s[1] <= 10.0
-            assert 0.0 <= s[2] <= 10.0
+            assert 0.0 <= s.position[0] <= 10.0
+            assert 0.0 <= s.position[1] <= 10.0
+            assert 0.0 <= s.position[2] <= 10.0
 
     def test_generator_rotation_axis_unit_length(self):
         c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
         for _ in range(20):
             s = c.generator()
-            axis_norm = math.sqrt(s[3] ** 2 + s[4] ** 2 + s[5] ** 2)
-            assert abs(axis_norm - 1.0) < 1e-9
+            assert abs(np.linalg.norm(s.axis) - 1.0) < 1e-9
 
     def test_generator_rotation_angle_in_range(self):
         c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
         for _ in range(20):
             s = c.generator()
-            assert 0.0 <= s[6] <= math.pi
+            assert 0.0 <= s.angle <= math.pi
 
     def test_is_frozen_dataclass(self):
         c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
@@ -105,11 +108,11 @@ class TestCube:
 
 
 class TestSphere:
-    def test_generator_returns_7_elements(self):
-        from maws.space import Sphere
+    def test_generator_returns_sample(self):
+        from maws.space import Sample, Sphere
 
-        s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
-        assert len(s.generator()) == 7
+        s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0])).generator()
+        assert isinstance(s, Sample)
 
     def test_generator_within_radius_at_origin(self):
         from maws.space import Sphere
@@ -117,7 +120,7 @@ class TestSphere:
         s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
         for _ in range(50):
             sample = s.generator()
-            assert np.linalg.norm(sample[:3]) <= 5.0 + 1e-9
+            assert np.linalg.norm(sample.position) <= 5.0 + 1e-9
 
     def test_generator_offset_by_centre(self):
         """Bug-fix from PR #38 carries over: samples must be offset by centre."""
@@ -127,7 +130,7 @@ class TestSphere:
         s = Sphere(radius=10.0, centre=centre)
         for _ in range(50):
             sample = s.generator()
-            assert np.linalg.norm(sample[:3] - centre) <= 10.0 + 1e-9
+            assert np.linalg.norm(sample.position - centre) <= 10.0 + 1e-9
 
     def test_radial_distribution_volume_correct(self):
         """E[r] = 3R/4 for uniform-in-volume sampling (= 3.75 for R=5)."""
@@ -135,7 +138,7 @@ class TestSphere:
 
         np.random.seed(0)
         s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
-        rs = np.array([np.linalg.norm(s.generator()[:3]) for _ in range(10_000)])
+        rs = np.array([np.linalg.norm(s.generator().position) for _ in range(10_000)])
         assert abs(rs.mean() - 3.75) < 0.05
 
     def test_direction_uniform_on_sphere(self):
@@ -144,18 +147,18 @@ class TestSphere:
 
         np.random.seed(1)
         s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
-        samples = np.array([s.generator()[:3] for _ in range(10_000)])
+        samples = np.array([s.generator().position for _ in range(10_000)])
         rs = np.linalg.norm(samples, axis=1, keepdims=True)
         unit_z = (samples / rs)[:, 2]
         assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
 
 
 class TestShell:
-    def test_generator_returns_7_elements(self):
-        from maws.space import Shell
+    def test_generator_returns_sample(self):
+        from maws.space import Sample, Shell
 
-        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        assert len(sh.generator()) == 7
+        s = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0])).generator()
+        assert isinstance(s, Sample)
 
     def test_generator_within_shell_at_origin(self):
         from maws.space import Shell
@@ -163,7 +166,7 @@ class TestShell:
         sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
         for _ in range(50):
             sample = sh.generator()
-            r = np.linalg.norm(sample[:3])
+            r = np.linalg.norm(sample.position)
             assert 5.0 - 1e-9 <= r <= 10.0 + 1e-9
 
     def test_generator_offset_by_centre(self):
@@ -173,7 +176,7 @@ class TestShell:
         sh = Shell(inner=5.0, outer=10.0, centre=centre)
         for _ in range(50):
             sample = sh.generator()
-            r = np.linalg.norm(sample[:3] - centre)
+            r = np.linalg.norm(sample.position - centre)
             assert 5.0 - 1e-9 <= r <= 10.0 + 1e-9
 
     def test_radial_distribution_uniform_in_volume(self):
@@ -182,7 +185,7 @@ class TestShell:
 
         np.random.seed(0)
         sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        rs = np.array([np.linalg.norm(sh.generator()[:3]) for _ in range(10_000)])
+        rs = np.array([np.linalg.norm(sh.generator().position) for _ in range(10_000)])
         expected = (3 / 4) * (10**4 - 5**4) / (10**3 - 5**3)
         assert abs(rs.mean() - expected) < 0.1
 
@@ -191,7 +194,7 @@ class TestShell:
 
         np.random.seed(1)
         sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        samples = np.array([sh.generator()[:3] for _ in range(10_000)])
+        samples = np.array([sh.generator().position for _ in range(10_000)])
         rs = np.linalg.norm(samples, axis=1, keepdims=True)
         unit_z = (samples / rs)[:, 2]
         assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
@@ -290,7 +293,7 @@ class TestSurfaceSampler:
         sampler = SurfaceSampler(envelope=envelope, excluder=excluder)
         for _ in range(50):
             sample = sampler.generator()
-            assert excluder.is_clear(sample[:3])
+            assert excluder.is_clear(sample.position)
 
     def test_raises_when_envelope_buried(self, synthetic_two_carbon_complex):
         """A Cube of width 0.1 sitting on an atom is fully blocked."""
@@ -349,4 +352,4 @@ class TestMakeSampler:
         s = make_sampler("shell", synthetic_octahedron_complex)
         for _ in range(20):
             sample = s.generator()
-            assert s.excluder.is_clear(sample[:3])
+            assert s.excluder.is_clear(sample.position)

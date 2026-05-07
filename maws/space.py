@@ -84,10 +84,24 @@ _BONDI_VDW_RADII: dict[str, float] = {
 _DEFAULT_VDW = 1.70
 
 
-class Envelope(Protocol):
-    """Anything with `.generator() -> 7-element ndarray` is an envelope."""
+@dataclass(frozen=True)
+class Sample:
+    """One pose drawn from an envelope: a position + a rotation."""
 
-    def generator(self) -> np.ndarray: ...
+    position: np.ndarray  # shape (3,), Å
+    axis: np.ndarray  # shape (3,), unit vector
+    angle: float  # radians
+
+
+def _random_unit_axis() -> np.ndarray:
+    v = np.random.uniform(-1, 1, 3)
+    return v / np.linalg.norm(v)
+
+
+class Envelope(Protocol):
+    """Anything with `.generator() -> Sample` is an envelope."""
+
+    def generator(self) -> Sample: ...
 
 
 @dataclass(frozen=True)
@@ -97,22 +111,34 @@ class Cube:
     width: float
     centre: np.ndarray
 
-    def generator(self) -> np.ndarray:
-        axis = np.random.uniform(-1, 1, 3)
-        ax, ay, az = axis / np.linalg.norm(axis)
-        rotation = np.random.uniform(0, np.pi)
+    def generator(self) -> Sample:
         half = self.width / 2.0
-        return np.array(
+        position = np.array(
             [
                 np.random.uniform(self.centre[0] - half, self.centre[0] + half),
                 np.random.uniform(self.centre[1] - half, self.centre[1] + half),
                 np.random.uniform(self.centre[2] - half, self.centre[2] + half),
-                ax,
-                ay,
-                az,
-                rotation,
             ]
         )
+        return Sample(
+            position=position,
+            axis=_random_unit_axis(),
+            angle=float(np.random.uniform(0, np.pi)),
+        )
+
+
+def _spherical_sample(centre: np.ndarray, r: float) -> np.ndarray:
+    """Random point on a sphere of radius `r` around `centre` (uniform direction)."""
+    phi = np.random.uniform(0, 2 * np.pi)
+    cos_psi = np.random.uniform(-1, 1)  # uniform on the sphere
+    sin_psi = np.sqrt(1.0 - cos_psi * cos_psi)
+    return np.array(
+        [
+            centre[0] + r * np.cos(phi) * sin_psi,
+            centre[1] + r * np.sin(phi) * sin_psi,
+            centre[2] + r * cos_psi,
+        ]
+    )
 
 
 @dataclass(frozen=True)
@@ -122,27 +148,13 @@ class Sphere:
     radius: float
     centre: np.ndarray
 
-    def generator(self) -> np.ndarray:
-        axis = np.random.uniform(-1, 1, 3)
-        ax, ay, az = axis / np.linalg.norm(axis)
+    def generator(self) -> Sample:
         # Volume-correct: r = R · u^(1/3) for u ~ U(0,1).
-        u = np.random.uniform(0, 1)
-        r = self.radius * u ** (1 / 3)
-        phi = np.random.uniform(0, 2 * np.pi)
-        # Uniform on sphere: cos(psi) ~ U(-1, 1).
-        cos_psi = np.random.uniform(-1, 1)
-        psi = np.arccos(cos_psi)
-        rotation = np.random.uniform(0, 2 * np.pi)
-        return np.array(
-            [
-                self.centre[0] + r * np.cos(phi) * np.sin(psi),
-                self.centre[1] + r * np.sin(phi) * np.sin(psi),
-                self.centre[2] + r * np.cos(psi),
-                ax,
-                ay,
-                az,
-                rotation,
-            ]
+        r = self.radius * np.random.uniform(0, 1) ** (1 / 3)
+        return Sample(
+            position=_spherical_sample(self.centre, r),
+            axis=_random_unit_axis(),
+            angle=float(np.random.uniform(0, 2 * np.pi)),
         )
 
 
@@ -154,26 +166,14 @@ class Shell:
     outer: float
     centre: np.ndarray
 
-    def generator(self) -> np.ndarray:
-        axis = np.random.uniform(-1, 1, 3)
-        ax, ay, az = axis / np.linalg.norm(axis)
+    def generator(self) -> Sample:
         # Volume-correct shell: r = (u·(R_out^3 - R_in^3) + R_in^3)^(1/3).
         u = np.random.uniform(0, 1)
         r = (u * (self.outer**3 - self.inner**3) + self.inner**3) ** (1 / 3)
-        phi = np.random.uniform(0, 2 * np.pi)
-        cos_psi = np.random.uniform(-1, 1)
-        psi = np.arccos(cos_psi)
-        rotation = np.random.uniform(0, 2 * np.pi)
-        return np.array(
-            [
-                self.centre[0] + r * np.cos(phi) * np.sin(psi),
-                self.centre[1] + r * np.sin(phi) * np.sin(psi),
-                self.centre[2] + r * np.cos(psi),
-                ax,
-                ay,
-                az,
-                rotation,
-            ]
+        return Sample(
+            position=_spherical_sample(self.centre, r),
+            axis=_random_unit_axis(),
+            angle=float(np.random.uniform(0, 2 * np.pi)),
         )
 
 
@@ -235,6 +235,34 @@ class Excluder:
         return bool((dists2 > self._inflated[idx] ** 2).all())
 
 
+# Per-shape formula for auto-sizing the envelope from the ligand bounding
+# radii. Each entry maps shape name → (R_max, R_min, com, reach) → kwargs
+# dict for the matching envelope dataclass. Single source of truth for
+# both shape names AND sizing rules.
+_DIM_FORMULAS: dict = {
+    "cube": lambda R_max, R_min, com, reach: {
+        "width": 2.0 * (R_max + reach),
+        "centre": com,
+    },
+    "sphere": lambda R_max, R_min, com, reach: {
+        "radius": R_max + reach,
+        "centre": com,
+    },
+    "shell": lambda R_max, R_min, com, reach: {
+        "inner": max(0.0, R_min - 5.0),
+        "outer": R_max + reach,
+        "centre": com,
+    },
+}
+
+
+def _atom_mass_in_dalton(atom) -> float:
+    m = atom.element.mass
+    if hasattr(m, "value_in_unit"):
+        return m.value_in_unit(unit.dalton)
+    return float(m)
+
+
 def compute_envelope_dims(complex_obj, shape: str, reach: float) -> dict:
     """
     Compute auto-sized envelope dimensions from the ligand atoms.
@@ -242,7 +270,7 @@ def compute_envelope_dims(complex_obj, shape: str, reach: float) -> dict:
     Parameters
     ----------
     complex_obj
-        Object with `.positions` (Quantity) and `.topology.atoms` (yielding
+        Object with `.positions` (Quantity) and `.topology.atoms()` (yielding
         atoms with `.element.mass`).
     shape : {"cube", "sphere", "shell"}
         Envelope shape.
@@ -252,36 +280,21 @@ def compute_envelope_dims(complex_obj, shape: str, reach: float) -> dict:
     Returns
     -------
     dict
-        Kwargs suitable for the matching envelope dataclass:
-          cube   → {"width", "centre"}
-          sphere → {"radius", "centre"}
-          shell  → {"inner", "outer", "centre"}
+        Kwargs for the matching envelope dataclass.
     """
+    formula = _DIM_FORMULAS.get(shape)
+    if formula is None:
+        raise ValueError(
+            f"Unknown shape {shape!r}; expected one of {list(_DIM_FORMULAS)}."
+        )
     pos = np.asarray(nostrom(complex_obj.positions), dtype=float)
-
-    def _mass(atom):
-        m = atom.element.mass
-        if hasattr(m, "value_in_unit"):
-            return m.value_in_unit(unit.dalton)
-        return float(m)
-
-    masses = np.array([_mass(a) for a in complex_obj.topology.atoms()], dtype=float)
+    masses = np.array(
+        [_atom_mass_in_dalton(a) for a in complex_obj.topology.atoms()],
+        dtype=float,
+    )
     com = mass_weighted_center(pos, masses)
     dists = np.linalg.norm(pos - com, axis=1)
-    R_max = float(dists.max())
-    R_min = float(dists.min())
-
-    if shape == "cube":
-        return {"width": 2.0 * (R_max + reach), "centre": com}
-    if shape == "sphere":
-        return {"radius": R_max + reach, "centre": com}
-    if shape == "shell":
-        return {
-            "inner": max(0.0, R_min - 5.0),
-            "outer": R_max + reach,
-            "centre": com,
-        }
-    raise ValueError(f"Unknown shape {shape!r}; expected one of cube / sphere / shell.")
+    return formula(float(dists.max()), float(dists.min()), com, reach)
 
 
 class SamplingError(RuntimeError):
@@ -307,10 +320,10 @@ class SurfaceSampler:
     excluder: Excluder
     max_rejections: int = 1000
 
-    def generator(self) -> np.ndarray:
+    def generator(self) -> Sample:
         for _ in range(self.max_rejections):
             sample = self.envelope.generator()
-            if self.excluder.is_clear(sample[:3]):
+            if self.excluder.is_clear(sample.position):
                 return sample
         raise SamplingError(
             f"Could not draw a clear point in {self.max_rejections} attempts. "

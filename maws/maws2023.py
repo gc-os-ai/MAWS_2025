@@ -278,13 +278,11 @@ def main():
 
             # Sample orientations/rotations
             for _ in range(FIRST_CHUNK_SIZE):
-                orientation = sampler.generator()
+                pose = sampler.generator()
                 rotation = rotations.generator()
 
-                cx.translate_global(aptamer.element, orientation[0:3] * unit.angstrom)
-                cx.rotate_global(
-                    aptamer.element, orientation[3:-1] * unit.angstrom, orientation[-1]
-                )
+                cx.translate_global(aptamer.element, pose.position * unit.angstrom)
+                cx.rotate_global(aptamer.element, pose.axis * unit.angstrom, pose.angle)
 
                 for j in range(N_ELEMENTS):
                     aptamer.rotate_in_residue(0, j, rotation[j])
