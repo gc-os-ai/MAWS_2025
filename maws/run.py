@@ -6,13 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import numpy as np
 from openmm import app, unit
 
 import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
-from maws.helpers import center_of_mass, nostrom
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
@@ -60,6 +58,9 @@ class MawsRunner:
         remove_h: bool = False,
         drop_hetatm: bool = False,
         verbose: bool = False,
+        shape: Literal["cube", "sphere", "shell"] = "shell",
+        reach: float = 10.0,
+        probe: float = 1.4,
     ) -> None:
         if num_nucleotides <= 0:
             raise ValueError("num_nucleotides couldn't be less than 0")
@@ -77,6 +78,9 @@ class MawsRunner:
         self.remove_h = remove_h
         self.drop_hetatm = drop_hetatm
         self.verbose = verbose
+        self.shape = shape
+        self.reach = reach
+        self.probe = probe
 
     def run(
         self,
@@ -195,9 +199,11 @@ class MawsRunner:
         )
         ligand_only.build()
 
-        cube = space.Cube(
-            20.0,
-            center_of_mass(np.asarray(nostrom(ligand_only.positions))),
+        sampler = space.make_sampler(
+            self.shape,
+            ligand_only,
+            reach=self.reach,
+            probe=self.probe,
         )
         rotations = space.NAngles(N_BACKBONE_TORSIONS)
 
@@ -226,7 +232,7 @@ class MawsRunner:
             positions0 = cx.positions[:]
 
             for _ in range(self.first_chunk_size):
-                orientation = cube.generator()
+                orientation = sampler.generator()
                 rotation = rotations.generator()
 
                 cx.translate_global(aptamer.element, orientation[0:3] * unit.angstrom)
