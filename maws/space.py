@@ -104,6 +104,37 @@ class Cube:
         )
 
 
+@dataclass(frozen=True)
+class Sphere:
+    """Sphere of given radius centered on `centre` (Å). Volume-correct sampling."""
+
+    radius: float
+    centre: np.ndarray
+
+    def generator(self) -> np.ndarray:
+        axis = np.random.uniform(-1, 1, 3)
+        ax, ay, az = axis / np.linalg.norm(axis)
+        # Volume-correct: r = R · u^(1/3) for u ~ U(0,1).
+        u = np.random.uniform(0, 1)
+        r = self.radius * u ** (1 / 3)
+        phi = np.random.uniform(0, 2 * np.pi)
+        # Uniform on sphere: cos(psi) ~ U(-1, 1).
+        cos_psi = np.random.uniform(-1, 1)
+        psi = np.arccos(cos_psi)
+        rotation = np.random.uniform(0, 2 * np.pi)
+        return np.array(
+            [
+                self.centre[0] + r * np.cos(phi) * np.sin(psi),
+                self.centre[1] + r * np.sin(phi) * np.sin(psi),
+                self.centre[2] + r * np.cos(psi),
+                ax,
+                ay,
+                az,
+                rotation,
+            ]
+        )
+
+
 # ============================================================================
 # Legacy Space + NAngles (still used by run.py / maws2023.py until migration).
 # ============================================================================

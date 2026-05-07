@@ -93,3 +93,49 @@ class TestCube:
             assert "frozen" in str(e).lower() or "FrozenInstance" in type(e).__name__
             return
         raise AssertionError("expected FrozenInstanceError on attribute assignment")
+
+
+class TestSphere:
+    def test_generator_returns_7_elements(self):
+        from maws.space import Sphere
+
+        s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
+        assert len(s.generator()) == 7
+
+    def test_generator_within_radius_at_origin(self):
+        from maws.space import Sphere
+
+        s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
+        for _ in range(50):
+            sample = s.generator()
+            assert np.linalg.norm(sample[:3]) <= 5.0 + 1e-9
+
+    def test_generator_offset_by_centre(self):
+        """Bug-fix from PR #38 carries over: samples must be offset by centre."""
+        from maws.space import Sphere
+
+        centre = np.array([50.0, -30.0, 12.0])
+        s = Sphere(radius=10.0, centre=centre)
+        for _ in range(50):
+            sample = s.generator()
+            assert np.linalg.norm(sample[:3] - centre) <= 10.0 + 1e-9
+
+    def test_radial_distribution_volume_correct(self):
+        """E[r] = 3R/4 for uniform-in-volume sampling (= 3.75 for R=5)."""
+        from maws.space import Sphere
+
+        np.random.seed(0)
+        s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
+        rs = np.array([np.linalg.norm(s.generator()[:3]) for _ in range(10_000)])
+        assert abs(rs.mean() - 3.75) < 0.05
+
+    def test_direction_uniform_on_sphere(self):
+        """E[(z/r)^2] = 1/3 for uniform direction (vs 1/2 if biased to poles)."""
+        from maws.space import Sphere
+
+        np.random.seed(1)
+        s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
+        samples = np.array([s.generator()[:3] for _ in range(10_000)])
+        rs = np.linalg.norm(samples, axis=1, keepdims=True)
+        unit_z = (samples / rs)[:, 2]
+        assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
