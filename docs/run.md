@@ -39,6 +39,15 @@ config = MAWSConfig(
 | `remove_h` | `bool` | `False` | Remove hydrogens |
 | `drop_hetatm` | `bool` | `False` | Drop HETATM records |
 | `verbose` | `bool` | `True` | Log progress to console |
+| `shape` | `"cube"`, `"sphere"`, `"shell"` | `"shell"` | Surface-aware sampler envelope geometry |
+| `reach` | `float` | `10.0` | Distance the envelope extends past the ligand surface (Å) |
+| `probe` | `float` | `1.4` | vdW probe radius for SAS rejection (Å, water-equivalent) |
+
+> **Note (2026):** the initial pose search now restricts samples to the
+> region just outside the ligand surface, computed automatically from
+> the ligand atoms. The three new parameters above (`shape`, `reach`,
+> `probe`) tune the envelope; defaults work for most targets. See
+> [docs/space.md](space.md) for the underlying API.
 
 ### MAWSResult
 

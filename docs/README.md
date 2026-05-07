@@ -260,14 +260,14 @@ aptamer = cpx.aptamer_chain()
 aptamer.create_sequence("G A U C")
 cpx.build()
 
-# 5. Sample conformations
+# 5. Sample conformations with the surface-aware sampler
 import maws.space as space
-cube = space.Cube(20.0, center)
+sampler = space.make_sampler("shell", ligand_only_cpx)  # auto-sized envelope + SAS rejection
 
 for _ in range(1000):
-    sample = cube.generator()
-    cpx.translate_global(aptamer.element, sample[:3])
-    cpx.rotate_global(aptamer.element, sample[3:6], sample[6])
+    pose = sampler.generator()  # Sample(position, axis, angle)
+    cpx.translate_global(aptamer.element, pose.position)
+    cpx.rotate_global(aptamer.element, pose.axis, pose.angle)
 
     for i in range(4):
         aptamer.rotate_in_residue(0, i, random_angle)
@@ -277,6 +277,9 @@ for _ in range(1000):
 
     cpx.rebuild()  # Reset for next sample
 ```
+
+See [docs/space.md](space.md) for the surface-aware sampler API (`make_sampler`,
+the envelope dataclasses, `Excluder`, `SurfaceSampler`).
 
 ---
 
