@@ -195,3 +195,52 @@ class TestShell:
         rs = np.linalg.norm(samples, axis=1, keepdims=True)
         unit_z = (samples / rs)[:, 2]
         assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
+
+
+class TestExcluder:
+    def test_clear_far_from_atoms(self, synthetic_two_carbon_complex):
+        from maws.space import Excluder
+
+        ex = Excluder(synthetic_two_carbon_complex, probe=1.4)
+        assert ex.is_clear(np.array([100.0, 100.0, 100.0]))
+
+    def test_blocked_at_atom_centre(self, synthetic_two_carbon_complex):
+        from maws.space import Excluder
+
+        ex = Excluder(synthetic_two_carbon_complex, probe=1.4)
+        assert not ex.is_clear(np.array([0.0, 0.0, 0.0]))
+
+    def test_boundary_just_inside_and_just_outside(self, synthetic_two_carbon_complex):
+        """C vdW = 1.70, probe = 1.4 → blocked iff dist <= 3.10."""
+        from maws.space import Excluder
+
+        ex = Excluder(synthetic_two_carbon_complex, probe=1.4)
+        # 3.0 from atom — inside the inflated sphere, blocked
+        assert not ex.is_clear(np.array([3.0, 0.0, 0.0]))
+        # 3.2 from atom — just outside, clear
+        assert ex.is_clear(np.array([3.2, 0.0, 0.0]))
+
+    def test_unknown_element_falls_back_with_warning(self):
+        """Unknown element symbol uses _DEFAULT_VDW and emits a warning once."""
+        import warnings
+
+        from openmm import unit as ommunit
+
+        from maws.space import _DEFAULT_VDW, Excluder
+
+        positions = np.array([[0.0, 0.0, 0.0]]) * ommunit.angstrom
+        atom = type("A", (), {"element": type("E", (), {"symbol": "Xx"})()})()
+        topo = type("T", (), {"atoms": iter([atom])})()
+        cx = type("C", (), {"positions": positions, "topology": topo})()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ex = Excluder(cx, probe=0.0)
+            # blocked iff dist < _DEFAULT_VDW (1.70)
+            assert not ex.is_clear(np.array([1.0, 0.0, 0.0]))
+            assert ex.is_clear(np.array([2.5, 0.0, 0.0]))
+        assert any("Xx" in str(w.message) for w in caught), (
+            f"expected warning mentioning 'Xx', got {[str(w.message) for w in caught]}"
+        )
+        # Touch the unused-but-meaningful default to silence linters
+        assert _DEFAULT_VDW == 1.70

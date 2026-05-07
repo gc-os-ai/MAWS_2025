@@ -29,10 +29,12 @@ Create a 4-angle torsion space:
 4
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+from scipy.spatial import KDTree
 
 # ============================================================================
 # Surface-aware sampling — public API
@@ -173,3 +175,53 @@ class NAngles:
 
     def generator(self) -> np.ndarray:
         return np.random.uniform(0, 2 * np.pi, self.n)
+
+
+class Excluder:
+    """
+    Rejects candidate points lying inside (vdW + probe) of any ligand atom.
+
+    Parameters
+    ----------
+    complex_obj
+        Anything with `.positions` (openmm Quantity, Å-convertible, shape (N,3))
+        and `.topology.atoms` (iterable yielding objects with `.element.symbol`).
+    probe : float
+        SAS probe radius in Å. Default 1.4 (water-like).
+    """
+
+    # Process-wide: one warning per unknown element symbol.
+    _warned: set[str] = set()
+
+    def __init__(self, complex_obj, probe: float = 1.4):
+        from maws.helpers import nostrom
+
+        positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
+        radii = np.empty(len(positions), dtype=float)
+        for i, atom in enumerate(complex_obj.topology.atoms):
+            sym = atom.element.symbol
+            r = _BONDI_VDW_RADII.get(sym)
+            if r is None:
+                r = _DEFAULT_VDW
+                if sym not in Excluder._warned:
+                    Excluder._warned.add(sym)
+                    warnings.warn(
+                        f"Unknown element {sym!r} — using fallback "
+                        f"vdW = {_DEFAULT_VDW} Å",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            radii[i] = r
+        self._positions = positions
+        self._inflated = radii + probe
+        self._max_inflated = float(self._inflated.max())
+        self._tree = KDTree(positions)
+
+    def is_clear(self, point: np.ndarray) -> bool:
+        """True iff `point` lies outside every (vdW + probe) sphere."""
+        idx = self._tree.query_ball_point(point, self._max_inflated)
+        if not idx:
+            return True
+        diffs = self._positions[idx] - np.asarray(point)
+        dists2 = (diffs**2).sum(axis=1)
+        return bool((dists2 > self._inflated[idx] ** 2).all())
