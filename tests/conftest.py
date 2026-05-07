@@ -66,8 +66,8 @@ class _SyntheticTopology:
     def __init__(self, symbols):
         self._atoms = [_SyntheticAtom(s) for s in symbols]
 
-    @property
     def atoms(self):
+        # Match OpenMM Topology.atoms(), which is a generator method.
         return iter(self._atoms)
 
 

@@ -230,7 +230,7 @@ class TestExcluder:
 
         positions = np.array([[0.0, 0.0, 0.0]]) * ommunit.angstrom
         atom = type("A", (), {"element": type("E", (), {"symbol": "Xx"})()})()
-        topo = type("T", (), {"atoms": iter([atom])})()
+        topo = type("T", (), {"atoms": lambda self: iter([atom])})()
         cx = type("C", (), {"positions": positions, "topology": topo})()
 
         with warnings.catch_warnings(record=True) as caught:

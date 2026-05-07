@@ -199,7 +199,7 @@ class Excluder:
     def __init__(self, complex_obj, probe: float = 1.4):
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
         radii = np.empty(len(positions), dtype=float)
-        for i, atom in enumerate(complex_obj.topology.atoms):
+        for i, atom in enumerate(complex_obj.topology.atoms()):
             sym = atom.element.symbol
             r = _BONDI_VDW_RADII.get(sym)
             if r is None:
@@ -258,7 +258,7 @@ def compute_envelope_dims(complex_obj, shape: str, reach: float) -> dict:
             return m.value_in_unit(unit.dalton)
         return float(m)
 
-    masses = np.array([_mass(a) for a in complex_obj.topology.atoms], dtype=float)
+    masses = np.array([_mass(a) for a in complex_obj.topology.atoms()], dtype=float)
     com = mass_weighted_center(pos, masses)
     dists = np.linalg.norm(pos - com, axis=1)
     R_max = float(dists.max())
