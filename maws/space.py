@@ -97,7 +97,16 @@ class Sample:
 
 
 def _random_unit_axis() -> np.ndarray:
-    v = np.random.uniform(-1, 1, 3)
+    """Random unit vector uniformly distributed on the unit sphere.
+
+    Uses the standard Gaussian-then-normalize recipe: the multivariate
+    standard normal has spherically symmetric density, so normalizing
+    yields a point uniform on the unit sphere. A naive uniform draw in
+    the cube ``[-1, 1]^3`` followed by normalization would
+    over-represent the cube's corner-aligned directions because the
+    cube has greater radial extent along its diagonals than its faces.
+    """
+    v = np.random.standard_normal(3)
     return v / np.linalg.norm(v)
 
 
@@ -193,10 +202,15 @@ class Excluder:
     Decision rule
     -------------
     For a candidate point ``p``, this class returns ``is_clear(p) = True``
-    iff a probe-sized sphere could physically sit at ``p`` without
-    overlapping any protein atom:
+    iff a probe-sized sphere could physically sit at ``p`` strictly
+    outside every protein atom:
 
-        ``dist(p, atom_i) ≥ vdW(atom_i) + probe``  for every atom *i*.
+        ``dist(p, atom_i) > vdW(atom_i) + probe``  for every atom *i*.
+
+    The strict inequality is a measure-zero convention for continuous
+    rejection sampling: a point lying exactly on the SAS boundary is
+    treated as blocked. With float64 positions this never matters in
+    practice, but the docstring matches the code.
 
     The protein atomic vdW radii come from the Bondi (1964) table at the
     top of this module; unknown elements fall back to the carbon-equivalent

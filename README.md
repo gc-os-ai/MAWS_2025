@@ -21,9 +21,11 @@ mass-weighted centre of mass. Two CLI flags control behavior:
   (default `1.4`, water-equivalent).
 
 The same options are available as keyword arguments on
-`maws.run.MawsRunner` for programmatic use. See
-[docs/space.md](docs/space.md) for the full API and a sketch of the
-planned surface-following replacement.
+`maws.run.MawsRunner` for programmatic use. An opt-in surface-following
+sampling mode (`maws.space.make_sampler(..., mode="surface-following",
+d_max=...)`) is also implemented for users who want accepted poses
+concentrated near the molecular surface; see [docs/space.md](docs/space.md)
+for the full API.
 
 ### original readme
 

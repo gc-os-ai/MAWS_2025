@@ -112,6 +112,66 @@ class TestSphere:
         assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
 
 
+class TestRandomUnitAxis:
+    """Regression: ``_random_unit_axis`` must be isotropic on the unit sphere.
+
+    A previous implementation drew uniformly from the cube
+    ``[-1, 1]^3`` and normalised; that biased directions toward the
+    cube's eight corners and away from its face-centres (the cube's
+    corners are at distance √3 from the origin, faces at distance 1,
+    so cube interior volume that normalises near a corner is larger
+    than that which normalises near a face-centre).
+
+    The fix is the standard Gaussian-then-normalise recipe (the
+    multivariate standard normal is spherically symmetric).
+    """
+
+    def test_axes_are_unit_length(self):
+        from maws.space import _random_unit_axis
+
+        np.random.seed(0)
+        for _ in range(50):
+            axis = _random_unit_axis()
+            assert abs(np.linalg.norm(axis) - 1.0) < 1e-9
+
+    def test_isotropic_face_vs_corner_directions(self):
+        """Statistic that cleanly separates uniform from cube-biased.
+
+        Classify each axis by its absolute-value components:
+
+        - ``face``: one component dominates, ``max|.|  > 0.85`` (axis
+          lies near a ±x/±y/±z direction).
+        - ``corner``: all three components similar size,
+          ``min|.| > 0.45`` (axis lies near a (±1, ±1, ±1)/√3
+          direction).
+
+        At N = 50_000:
+        - Uniform on sphere: face fraction ≈ 0.45, corner ≈ 0.07
+        - Cube-then-normalise (buggy): face ≈ 0.30, corner ≈ 0.12
+
+        A threshold of face ≥ 0.40 cleanly distinguishes the two.
+        """
+        from maws.space import _random_unit_axis
+
+        np.random.seed(0)
+        n = 50_000
+        axes = np.abs(np.array([_random_unit_axis() for _ in range(n)]))
+        max_per_axis = axes.max(axis=1)
+        min_per_axis = axes.min(axis=1)
+        face_fraction = float((max_per_axis > 0.85).mean())
+        corner_fraction = float((min_per_axis > 0.45).mean())
+        # Uniform target ≈ 0.45 / 0.07; the buggy cube-normalise gives
+        # 0.30 / 0.12. The bands below cleanly separate them.
+        assert face_fraction > 0.40, (
+            f"face_fraction = {face_fraction:.3f}, expected > 0.40 "
+            f"(cube-bias produces ~0.30)"
+        )
+        assert corner_fraction < 0.10, (
+            f"corner_fraction = {corner_fraction:.3f}, expected < 0.10 "
+            f"(cube-bias produces ~0.12)"
+        )
+
+
 class TestExcluder:
     def test_clear_far_from_atoms(self, synthetic_two_carbon_complex):
         from maws.space import Excluder
