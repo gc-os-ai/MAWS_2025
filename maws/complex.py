@@ -281,12 +281,19 @@ class Complex:
             SHA1 hex digest over:
               - normalized ``build_string`` (whitespace collapsed),
               - each chain's LEaP ``init_string`` with whitespace stripped,
-              - each chain's canonical sequence string.
+              - each chain's canonical sequence string,
+              - the *contents* of each chain's ``.lib``/``.frcmod`` files.
 
         Notes
         -----
         The cache is stored under ``.maws_cache/`` with filenames
         ``<key>.prmtop`` and ``<key>.inpcrd``.
+
+        The library file contents are included because ``make_lib`` hardcodes the
+        ligand residue name ``LIG``: every protein writes ``LIG.lib`` to the same
+        path and yields the same canonical sequence ``"LIG"``. Hashing only the
+        ``init_string`` (a ``loadoff <path>`` line) would therefore collide across
+        *different* proteins and silently serve the first one's cached topology.
         """
         payload = {
             "build": " ".join(self.build_string.split()),
@@ -294,8 +301,48 @@ class Complex:
                 ("".join(ch.structure.init_string.split())) for ch in self.chains
             ],
             "seqs": [ch.sequence for ch in self.chains],
+            "libs": [self._chain_lib_digests(ch) for ch in self.chains],
         }
         return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+    @staticmethod
+    def _chain_lib_digests(chain: Chain) -> list[list[str]]:
+        """
+        Return content digests of the ``.lib``/``.frcmod`` files a chain loads.
+
+        Parameters
+        ----------
+        chain : Chain
+            Chain whose :class:`Structure` references LEaP resource files.
+
+        Returns
+        -------
+        list[list[str]]
+            One ``[name, lib_digest, frcmod_digest]`` row per residue template.
+            A missing file contributes the sentinel ``""``. Returns an empty list
+            when the structure has no ``residue_path`` (no files to load).
+
+        Notes
+        -----
+        Used by :meth:`_build_cache_key` so that two ligands sharing the same
+        ``LIG.lib`` path but differing in contents produce different cache keys.
+        """
+        structure = chain.structure
+        residue_path = getattr(structure, "residue_path", None)
+        if residue_path is None:
+            return []
+
+        base = Path(residue_path) if residue_path != "" else Path(".")
+
+        def digest(path: Path) -> str:
+            if not path.exists():
+                return ""
+            return hashlib.sha1(path.read_bytes()).hexdigest()
+
+        return [
+            [name, digest(base / f"{name}.lib"), digest(base / f"{name}.frcmod")]
+            for name in structure.residue_names
+        ]
 
     def build(self, target_path: str = "", file_name: str = "out") -> None:
         """
