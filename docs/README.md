@@ -260,14 +260,29 @@ aptamer = cpx.aptamer_chain()
 aptamer.create_sequence("G A U C")
 cpx.build()
 
-# 5. Sample conformations
+# 5. Sample conformations with the surface-aware sampler
 import maws.space as space
-cube = space.Cube(20.0, center)
+
+# Build a ligand-only Complex containing just the protein (same pattern
+# `maws.run.MawsRunner.run` uses internally) and feed it to make_sampler.
+ligand_only = Complex(
+    force_field_aptamer="leaprc.RNA.OL3",
+    force_field_ligand="leaprc.protein.ff19SB",
+)
+ligand_only.add_chain_from_pdb(
+    pdb_path="ligand.pdb",
+    force_field_aptamer="leaprc.RNA.OL3",
+    force_field_ligand="leaprc.protein.ff19SB",
+    parameterized=True,
+)
+ligand_only.build()
+
+sampler = space.make_sampler(ligand_only)  # default: sphere envelope + SAS
 
 for _ in range(1000):
-    sample = cube.generator()
-    cpx.translate_global(aptamer.element, sample[:3])
-    cpx.rotate_global(aptamer.element, sample[3:6], sample[6])
+    pose = sampler.generator()  # Sample(position, axis, angle)
+    cpx.translate_global(aptamer.element, pose.position)
+    cpx.rotate_global(aptamer.element, pose.axis, pose.angle)
 
     for i in range(4):
         aptamer.rotate_in_residue(0, i, random_angle)
@@ -277,6 +292,10 @@ for _ in range(1000):
 
     cpx.rebuild()  # Reset for next sample
 ```
+
+See [docs/space.md](space.md) for the full surface-aware sampler API
+(`make_sampler`, `Sphere`, `Excluder`, `SurfaceSampler`, `SurfaceFollowingSampler`,
+and the two `mode=` options).
 
 ---
 

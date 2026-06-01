@@ -48,3 +48,25 @@ def test_maws_runner_smoke(tmp_path: Path) -> None:
     assert result.pdb_path.endswith("test_api_RESULT.pdb")
     assert Path(result.pdb_path).exists()
     assert Path(result.pdb_path).stat().st_size > 0
+
+
+def test_runner_rejects_negative_reach() -> None:
+    """MawsRunner raises ValueError on negative reach (no integration setup needed)."""
+    with pytest.raises(ValueError, match="reach must be >= 0"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            reach=-1.0,
+        )
+
+
+def test_runner_rejects_negative_probe() -> None:
+    """MawsRunner raises ValueError on negative probe (no integration setup needed)."""
+    with pytest.raises(ValueError, match="probe must be >= 0"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            probe=-1.0,
+        )

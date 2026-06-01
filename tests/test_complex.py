@@ -200,3 +200,30 @@ class TestComplexCacheKey:
         key2 = cpx2._build_cache_key()
 
         assert key1 != key2
+
+    def test_cache_key_differs_for_different_lib_contents(self, tmp_path):
+        """Two different ligands sharing the same LIG.lib path must not collide.
+
+        Regression test for the build-cache collision: ``make_lib`` hardcodes the
+        residue name ``LIG``, so every protein writes ``LIG.lib`` to the same path
+        and yields the same canonical sequence ``"LIG"``. The cache key must depend
+        on the .lib *contents*, otherwise the second protein silently reuses the
+        first protein's cached topology (dropping/replacing its residues).
+        """
+        lib = tmp_path / "LIG.lib"
+
+        # First ligand parameterization writes LIG.lib
+        lib.write_text('!!index array str\n "LIG"\n# protein A library contents\n')
+        struct_a = Structure(["LIG"], residue_length=[100], residue_path=str(tmp_path))
+        cpx_a = Complex()
+        cpx_a.add_chain("LIG", struct_a)
+        key_a = cpx_a._build_cache_key()
+
+        # Second ligand overwrites LIG.lib at the same path with different contents
+        lib.write_text('!!index array str\n "LIG"\n# protein B library contents\n')
+        struct_b = Structure(["LIG"], residue_length=[200], residue_path=str(tmp_path))
+        cpx_b = Complex()
+        cpx_b.add_chain("LIG", struct_b)
+        key_b = cpx_b._build_cache_key()
+
+        assert key_a != key_b

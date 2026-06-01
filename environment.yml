@@ -9,6 +9,8 @@ dependencies:
   - openmm=8.0.0
   - ambertools=23.3
   - mpmath>=1.2.1
+  - scipy
+  - matplotlib
   - ipykernel
   - jupyterlab
   - pip

@@ -98,3 +98,9 @@ cython_debug/
 *.log
 *.lib
 # We have to correct all this before release
+
+# Local Claude harness
+.claude/
+
+# Cleaned PDBs generated on demand by the pdb_cleaner — not source data.
+data/*_cleaned.pdb

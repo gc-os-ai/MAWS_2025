@@ -109,3 +109,28 @@ class TestCenterOfMass:
         coords = np.array([[5.0, 3.0, 1.0]])
         result = center_of_mass(coords)
         np.testing.assert_array_equal(result, [5.0, 3.0, 1.0])
+
+
+class TestMassWeightedCenter:
+    """Tests for mass_weighted_center (true mass-weighted COM)."""
+
+    def test_two_atom_system(self):
+        """COM of H + C system: weighted toward C by 12:1 mass ratio."""
+        from maws.helpers import mass_weighted_center
+
+        positions = np.array([[0.0, 0.0, 0.0], [13.0, 0.0, 0.0]])
+        masses = np.array([1.0, 12.0])
+        com = mass_weighted_center(positions, masses)
+        # Expected: (1·0 + 12·13) / 13 = 12.0 in x, 0 in y/z
+        np.testing.assert_allclose(com, [12.0, 0.0, 0.0])
+
+    def test_equal_masses_equals_centroid(self):
+        """With equal masses, mass-weighted COM equals the arithmetic centroid."""
+        from maws.helpers import center_of_mass, mass_weighted_center
+
+        positions = np.array([[0, 0, 0], [2, 0, 0], [1, 2, 0]], dtype=float)
+        masses = np.ones(3)
+        np.testing.assert_allclose(
+            mass_weighted_center(positions, masses),
+            center_of_mass(positions),
+        )

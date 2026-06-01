@@ -11,13 +11,11 @@ import copy
 import logging
 from datetime import datetime
 
-import numpy as np
 from openmm import app, unit
 
 import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
-from maws.helpers import center_of_mass, nostrom
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
@@ -27,6 +25,14 @@ from maws.routines import S
 VERSION = "1.0"  # Siddharth
 RELEASE_DATE = "2025"  # Siddharth
 METHOD = "Kullback-Leibler"
+
+
+def _non_negative_float(s: str) -> float:
+    """argparse `type=` validator that rejects negative floats."""
+    v = float(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {v}")
+    return v
 
 
 def parse_args():
@@ -99,6 +105,18 @@ def parse_args():
         "--drop-hetatm",
         action="store_true",
         help="Cleaner: drop all HETATM records (NOT recommended for small molecules).",
+    )
+    parser.add_argument(
+        "--reach",
+        type=_non_negative_float,
+        default=10.0,
+        help="How far the envelope extends beyond the ligand surface (Å). Default: 10.",
+    )
+    parser.add_argument(
+        "--probe",
+        type=_non_negative_float,
+        default=1.4,
+        help="vdW probe radius for SAS rejection (Å). Default: 1.4 (water-like).",
     )
     return parser.parse_args()
 
@@ -224,11 +242,8 @@ def main():
         )
         c.build()
 
-        # Sampling spaces: cube of width 20 Å around ligand COM
-        cube = space.Cube(
-            20.0,
-            center_of_mass(np.asarray(nostrom(c.positions))),
-        )
+        # Surface-aware sampler around the ligand (auto-sized envelope + SAS rejection)
+        sampler = space.make_sampler(c, reach=args.reach, probe=args.probe)
         rotations = space.NAngles(N_ELEMENTS)
 
         # Tracking best candidate
@@ -260,13 +275,11 @@ def main():
 
             # Sample orientations/rotations
             for _ in range(FIRST_CHUNK_SIZE):
-                orientation = cube.generator()
+                pose = sampler.generator()
                 rotation = rotations.generator()
 
-                cx.translate_global(aptamer.element, orientation[0:3] * unit.angstrom)
-                cx.rotate_global(
-                    aptamer.element, orientation[3:-1] * unit.angstrom, orientation[-1]
-                )
+                cx.translate_global(aptamer.element, pose.position * unit.angstrom)
+                cx.rotate_global(aptamer.element, pose.axis * unit.angstrom, pose.angle)
 
                 for j in range(N_ELEMENTS):
                     aptamer.rotate_in_residue(0, j, rotation[j])

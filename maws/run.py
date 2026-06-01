@@ -6,13 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import numpy as np
 from openmm import app, unit
 
 import maws.space as space
 from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
-from maws.helpers import center_of_mass, nostrom
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
 from maws.routines import S
@@ -60,11 +58,17 @@ class MawsRunner:
         remove_h: bool = False,
         drop_hetatm: bool = False,
         verbose: bool = False,
+        reach: float = 10.0,
+        probe: float = 1.4,
     ) -> None:
         if num_nucleotides <= 0:
             raise ValueError("num_nucleotides couldn't be less than 0")
         if first_chunck_size <= 0 or second_chunck_size <= 0:
             raise ValueError("Chunck size must be greater than 0")
+        if reach < 0:
+            raise ValueError(f"reach must be >= 0, got {reach}")
+        if probe < 0:
+            raise ValueError(f"probe must be >= 0, got {probe}")
 
         self.num_nucleotides = num_nucleotides
         self.aptamer_type = aptamer_type
@@ -77,6 +81,8 @@ class MawsRunner:
         self.remove_h = remove_h
         self.drop_hetatm = drop_hetatm
         self.verbose = verbose
+        self.reach = reach
+        self.probe = probe
 
     def run(
         self,
@@ -195,10 +201,7 @@ class MawsRunner:
         )
         ligand_only.build()
 
-        cube = space.Cube(
-            20.0,
-            center_of_mass(np.asarray(nostrom(ligand_only.positions))),
-        )
+        sampler = space.make_sampler(ligand_only, reach=self.reach, probe=self.probe)
         rotations = space.NAngles(N_BACKBONE_TORSIONS)
 
         # Track best candidate across steps
@@ -226,13 +229,11 @@ class MawsRunner:
             positions0 = cx.positions[:]
 
             for _ in range(self.first_chunk_size):
-                orientation = cube.generator()
+                pose = sampler.generator()
                 rotation = rotations.generator()
 
-                cx.translate_global(aptamer.element, orientation[0:3] * unit.angstrom)
-                cx.rotate_global(
-                    aptamer.element, orientation[3:-1] * unit.angstrom, orientation[-1]
-                )
+                cx.translate_global(aptamer.element, pose.position * unit.angstrom)
+                cx.rotate_global(aptamer.element, pose.axis * unit.angstrom, pose.angle)
 
                 for j in range(N_BACKBONE_TORSIONS):
                     aptamer.rotate_in_residue(0, j, rotation[j])

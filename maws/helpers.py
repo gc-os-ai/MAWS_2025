@@ -228,3 +228,36 @@ def center_of_mass(positions: ArrayLike) -> np.ndarray:
     """
     pos = np.asarray(positions, dtype=float)
     return pos.sum(axis=0) / len(pos)
+
+
+def mass_weighted_center(
+    positions: ArrayLike,
+    masses: ArrayLike,
+) -> np.ndarray:
+    """
+    Compute the true mass-weighted center of mass.
+
+    Parameters
+    ----------
+    positions : array-like, shape (N, 3)
+        Cartesian coordinates.
+    masses : array-like, shape (N,)
+        Atomic masses (any consistent units).
+
+    Returns
+    -------
+    numpy.ndarray, shape (3,)
+        Mass-weighted center of mass: sum(m·r) / sum(m).
+
+    Examples
+    --------
+    >>> from maws.helpers import mass_weighted_center
+    >>> import numpy as np
+    >>> pos = np.array([[0, 0, 0], [13, 0, 0]], dtype=float)
+    >>> m = np.array([1.0, 12.0])
+    >>> mass_weighted_center(pos, m)
+    array([12.,  0.,  0.])
+    """
+    pos = np.asarray(positions, dtype=float)
+    m = np.asarray(masses, dtype=float)
+    return (pos * m[:, None]).sum(axis=0) / m.sum()

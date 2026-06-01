@@ -39,6 +39,16 @@ config = MAWSConfig(
 | `remove_h` | `bool` | `False` | Remove hydrogens |
 | `drop_hetatm` | `bool` | `False` | Drop HETATM records |
 | `verbose` | `bool` | `True` | Log progress to console |
+| `reach` | `float` | `10.0` | Distance the envelope extends past the ligand surface (Å) |
+| `probe` | `float` | `1.4` | vdW probe radius for SAS rejection (Å, water-equivalent) |
+
+> **Note (2026):** the initial pose search now restricts samples to the
+> region just outside the ligand surface, computed automatically from
+> the ligand atoms. `reach` and `probe` tune that region; defaults work
+> for most targets. An opt-in `surface-following` sampling mode is also
+> available from the library (`maws.space.make_sampler(..., mode=...)`)
+> but is not exposed through `MawsRunner`. See
+> [docs/space.md](space.md) for the underlying API.
 
 ### MAWSResult
 
