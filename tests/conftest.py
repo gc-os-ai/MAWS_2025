@@ -102,37 +102,3 @@ def synthetic_octahedron_complex():
         ],
         symbols=["C"] * 6,
     )
-
-
-@pytest.fixture
-def synthetic_elongated_complex():
-    """Eight C atoms forming an elongated cluster: R_min ≈ 2 Å, R_max ≈ 20 Å.
-
-    Six atoms close to the COM (at radius 2 Å) plus two outliers at radius
-    20 Å along the x-axis. Used to verify shell sizing when R_min < R_max.
-    """
-    near = [
-        [2.0, 0.0, 0.0],
-        [-2.0, 0.0, 0.0],
-        [0.0, 2.0, 0.0],
-        [0.0, -2.0, 0.0],
-        [0.0, 0.0, 2.0],
-        [0.0, 0.0, -2.0],
-    ]
-    far = [[20.0, 0.0, 0.0], [-20.0, 0.0, 0.0]]
-    return SyntheticComplex(
-        positions_angstrom=near + far,
-        symbols=["C"] * 8,
-    )
-
-
-@pytest.fixture
-def synthetic_two_far_carbons():
-    """Two C atoms 12 Å from origin along x: R_min = R_max = 12 Å.
-
-    Used to verify shell sizing when R_min exceeds the inner buffer.
-    """
-    return SyntheticComplex(
-        positions_angstrom=[[12.0, 0.0, 0.0], [-12.0, 0.0, 0.0]],
-        symbols=["C", "C"],
-    )

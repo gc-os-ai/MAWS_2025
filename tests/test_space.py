@@ -2,7 +2,7 @@
 Tests for maws.space module.
 
 Surface-aware sampling primitives:
-- Cube / Sphere / Shell : envelope dataclasses
+- Sphere : envelope dataclass (only built-in)
 - NAngles : torsion angle sampling (U(1)^N)
 - Excluder : SAS-style rejection
 - SurfaceSampler : envelope + Excluder composer
@@ -13,7 +13,7 @@ import math
 
 import numpy as np
 
-from maws.space import _BONDI_VDW_RADII, _DEFAULT_VDW, Cube, NAngles
+from maws.space import _BONDI_VDW_RADII, _DEFAULT_VDW, NAngles
 
 
 class TestNAngles:
@@ -66,47 +66,6 @@ class TestBondiTable:
         assert _DEFAULT_VDW == 1.70
 
 
-class TestCube:
-    def test_generator_returns_sample(self):
-        from maws.space import Sample
-
-        c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        s = c.generator()
-        assert isinstance(s, Sample)
-        assert s.position.shape == (3,)
-        assert s.axis.shape == (3,)
-        assert isinstance(s.angle, float)
-
-    def test_generator_position_within_bounds(self):
-        c = Cube(width=10.0, centre=np.array([5.0, 5.0, 5.0]))
-        for _ in range(50):
-            s = c.generator()
-            assert 0.0 <= s.position[0] <= 10.0
-            assert 0.0 <= s.position[1] <= 10.0
-            assert 0.0 <= s.position[2] <= 10.0
-
-    def test_generator_rotation_axis_unit_length(self):
-        c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        for _ in range(20):
-            s = c.generator()
-            assert abs(np.linalg.norm(s.axis) - 1.0) < 1e-9
-
-    def test_generator_rotation_angle_in_range(self):
-        c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        for _ in range(20):
-            s = c.generator()
-            assert 0.0 <= s.angle <= math.pi
-
-    def test_is_frozen_dataclass(self):
-        c = Cube(width=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        try:
-            c.width = 20.0  # should raise
-        except Exception as e:
-            assert "frozen" in str(e).lower() or "FrozenInstance" in type(e).__name__
-            return
-        raise AssertionError("expected FrozenInstanceError on attribute assignment")
-
-
 class TestSphere:
     def test_generator_returns_sample(self):
         from maws.space import Sample, Sphere
@@ -148,53 +107,6 @@ class TestSphere:
         np.random.seed(1)
         s = Sphere(radius=5.0, centre=np.array([0.0, 0.0, 0.0]))
         samples = np.array([s.generator().position for _ in range(10_000)])
-        rs = np.linalg.norm(samples, axis=1, keepdims=True)
-        unit_z = (samples / rs)[:, 2]
-        assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
-
-
-class TestShell:
-    def test_generator_returns_sample(self):
-        from maws.space import Sample, Shell
-
-        s = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0])).generator()
-        assert isinstance(s, Sample)
-
-    def test_generator_within_shell_at_origin(self):
-        from maws.space import Shell
-
-        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        for _ in range(50):
-            sample = sh.generator()
-            r = np.linalg.norm(sample.position)
-            assert 5.0 - 1e-9 <= r <= 10.0 + 1e-9
-
-    def test_generator_offset_by_centre(self):
-        from maws.space import Shell
-
-        centre = np.array([50.0, -30.0, 12.0])
-        sh = Shell(inner=5.0, outer=10.0, centre=centre)
-        for _ in range(50):
-            sample = sh.generator()
-            r = np.linalg.norm(sample.position - centre)
-            assert 5.0 - 1e-9 <= r <= 10.0 + 1e-9
-
-    def test_radial_distribution_uniform_in_volume(self):
-        """E[r] = (3/4)·(R_out^4 - R_in^4)/(R_out^3 - R_in^3) ≈ 8.036 for [5, 10]."""
-        from maws.space import Shell
-
-        np.random.seed(0)
-        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        rs = np.array([np.linalg.norm(sh.generator().position) for _ in range(10_000)])
-        expected = (3 / 4) * (10**4 - 5**4) / (10**3 - 5**3)
-        assert abs(rs.mean() - expected) < 0.1
-
-    def test_direction_uniform_on_sphere(self):
-        from maws.space import Shell
-
-        np.random.seed(1)
-        sh = Shell(inner=5.0, outer=10.0, centre=np.array([0.0, 0.0, 0.0]))
-        samples = np.array([sh.generator().position for _ in range(10_000)])
         rs = np.linalg.norm(samples, axis=1, keepdims=True)
         unit_z = (samples / rs)[:, 2]
         assert abs(float((unit_z**2).mean()) - 1 / 3) < 0.04
@@ -250,60 +162,20 @@ class TestExcluder:
 
 
 class TestComputeEnvelopeDims:
-    def test_cube_dims_octahedron(self, synthetic_octahedron_complex):
-        from maws.space import compute_envelope_dims
-
-        d = compute_envelope_dims(synthetic_octahedron_complex, "cube", reach=10.0)
-        # COM = origin; R_max = 5.0; width = 2*(5+10) = 30
-        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
-        assert d["width"] == 30.0
-
     def test_sphere_dims_octahedron(self, synthetic_octahedron_complex):
         from maws.space import compute_envelope_dims
 
-        d = compute_envelope_dims(synthetic_octahedron_complex, "sphere", reach=10.0)
-        # radius = R_max + reach = 15.0
+        d = compute_envelope_dims(synthetic_octahedron_complex, reach=10.0)
+        # COM = origin; R_max = 5.0; radius = R_max + reach = 15.
         np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
         assert d["radius"] == 15.0
 
-    def test_shell_dims_octahedron(self, synthetic_octahedron_complex):
+    def test_radius_scales_with_reach(self, synthetic_octahedron_complex):
         from maws.space import compute_envelope_dims
 
-        d = compute_envelope_dims(synthetic_octahedron_complex, "shell", reach=10.0)
-        # R_min = R_max = 5.0 (octahedron); inner = max(0, 5 - 5) = 0; outer = 15
-        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
-        assert d["inner"] == 0.0
-        assert d["outer"] == 15.0
-
-    def test_unknown_shape_raises(self, synthetic_octahedron_complex):
-        import pytest
-
-        from maws.space import compute_envelope_dims
-
-        with pytest.raises(ValueError, match="cube|sphere|shell"):
-            compute_envelope_dims(synthetic_octahedron_complex, "blob", reach=10.0)
-
-    def test_shell_dims_when_rmin_lt_rmax(self, synthetic_elongated_complex):
-        """For an elongated ligand, shell inner uses R_min - buffer (not R_max)."""
-        from maws.space import _SHELL_INNER_BUFFER, compute_envelope_dims
-
-        d = compute_envelope_dims(synthetic_elongated_complex, "shell", reach=10.0)
-        # Geometry: COM = origin (symmetric), R_min = 2, R_max = 20.
-        # Expected: outer = 20 + 10 = 30; inner = max(0, 2 - buffer) = 0
-        # (since buffer = 5 Å > R_min); centre = origin.
-        np.testing.assert_allclose(d["centre"], [0.0, 0.0, 0.0])
-        assert d["outer"] == 30.0
-        assert d["inner"] == max(0.0, 2.0 - _SHELL_INNER_BUFFER)
-        assert d["inner"] < d["outer"]  # the meaningful contract
-
-    def test_shell_dims_when_rmin_exceeds_buffer(self, synthetic_two_far_carbons):
-        """When R_min > buffer the inner radius is non-trivial."""
-        from maws.space import _SHELL_INNER_BUFFER, compute_envelope_dims
-
-        d = compute_envelope_dims(synthetic_two_far_carbons, "shell", reach=10.0)
-        # R_min = R_max = 12 > buffer = 5 → inner = 12 - 5 = 7, outer = 12 + 10 = 22
-        assert d["inner"] == 12.0 - _SHELL_INNER_BUFFER
-        assert d["outer"] == 22.0
+        d_small = compute_envelope_dims(synthetic_octahedron_complex, reach=2.0)
+        d_large = compute_envelope_dims(synthetic_octahedron_complex, reach=20.0)
+        assert d_large["radius"] - d_small["radius"] == 18.0
 
 
 class TestMakeSamplerValidation:
@@ -313,7 +185,7 @@ class TestMakeSamplerValidation:
         from maws.space import make_sampler
 
         with pytest.raises(ValueError, match="reach must be >= 0"):
-            make_sampler("shell", synthetic_octahedron_complex, reach=-1.0)
+            make_sampler(synthetic_octahedron_complex, reach=-1.0)
 
     def test_rejects_negative_probe(self, synthetic_octahedron_complex):
         import pytest
@@ -321,7 +193,7 @@ class TestMakeSamplerValidation:
         from maws.space import make_sampler
 
         with pytest.raises(ValueError, match="probe must be >= 0"):
-            make_sampler("shell", synthetic_octahedron_complex, probe=-1.0)
+            make_sampler(synthetic_octahedron_complex, probe=-1.0)
 
 
 class TestSurfaceSampler:
@@ -336,12 +208,17 @@ class TestSurfaceSampler:
             assert excluder.is_clear(sample.position)
 
     def test_raises_when_envelope_buried(self, synthetic_two_carbon_complex):
-        """A Cube of width 0.1 sitting on an atom is fully blocked."""
+        """A tiny sphere sitting on an atom is fully blocked."""
         import pytest
 
-        from maws.space import Cube, Excluder, SamplingError, SurfaceSampler
+        from maws.space import (
+            Excluder,
+            SamplingError,
+            Sphere,
+            SurfaceSampler,
+        )
 
-        envelope = Cube(width=0.1, centre=np.array([0.0, 0.0, 0.0]))
+        envelope = Sphere(radius=0.05, centre=np.array([0.0, 0.0, 0.0]))
         excluder = Excluder(synthetic_two_carbon_complex, probe=1.4)
         sampler = SurfaceSampler(
             envelope=envelope, excluder=excluder, max_rejections=20
@@ -351,45 +228,137 @@ class TestSurfaceSampler:
 
 
 class TestMakeSampler:
-    def test_returns_surface_sampler(self, synthetic_octahedron_complex):
-        from maws.space import SurfaceSampler, make_sampler
+    def test_returns_surface_sampler_with_sphere_envelope(
+        self, synthetic_octahedron_complex
+    ):
+        from maws.space import Sphere, SurfaceSampler, make_sampler
 
-        s = make_sampler("shell", synthetic_octahedron_complex, reach=10.0, probe=1.4)
+        s = make_sampler(synthetic_octahedron_complex, reach=10.0, probe=1.4)
         assert isinstance(s, SurfaceSampler)
-
-    def test_chooses_correct_envelope_per_shape(self, synthetic_octahedron_complex):
-        from maws.space import Cube, Shell, Sphere, make_sampler
-
-        assert isinstance(
-            make_sampler("cube", synthetic_octahedron_complex).envelope, Cube
-        )
-        assert isinstance(
-            make_sampler("sphere", synthetic_octahedron_complex).envelope, Sphere
-        )
-        assert isinstance(
-            make_sampler("shell", synthetic_octahedron_complex).envelope, Shell
-        )
-
-    def test_rejects_unknown_shape(self, synthetic_octahedron_complex):
-        import pytest
-
-        from maws.space import make_sampler
-
-        with pytest.raises(ValueError, match="cube|sphere|shell"):
-            make_sampler("blob", synthetic_octahedron_complex)
+        assert isinstance(s.envelope, Sphere)
 
     def test_passes_dims_through(self, synthetic_octahedron_complex):
         """For the octahedron with reach=10, sphere radius should be 15."""
         from maws.space import make_sampler
 
-        s = make_sampler("sphere", synthetic_octahedron_complex, reach=10.0)
+        s = make_sampler(synthetic_octahedron_complex, reach=10.0)
         assert s.envelope.radius == 15.0
 
     def test_returns_clear_samples(self, synthetic_octahedron_complex):
         from maws.space import make_sampler
 
         np.random.seed(0)
-        s = make_sampler("shell", synthetic_octahedron_complex)
+        s = make_sampler(synthetic_octahedron_complex)
         for _ in range(20):
             sample = s.generator()
             assert s.excluder.is_clear(sample.position)
+
+
+class TestSurfaceFollowingSampler:
+    def test_generator_returns_sample(self, synthetic_octahedron_complex):
+        from maws.space import Sample, SurfaceFollowingSampler
+
+        np.random.seed(0)
+        sf = SurfaceFollowingSampler(synthetic_octahedron_complex, d_max=6.0, probe=1.4)
+        sample = sf.generator()
+        assert isinstance(sample, Sample)
+        assert sample.position.shape == (3,)
+        assert sample.axis.shape == (3,)
+        assert isinstance(sample.angle, float)
+
+    def test_samples_within_d_max_of_some_atom(self, synthetic_octahedron_complex):
+        from scipy.spatial import KDTree
+
+        from maws.helpers import nostrom
+        from maws.space import SurfaceFollowingSampler
+
+        np.random.seed(0)
+        d_max = 4.0
+        positions = np.asarray(
+            nostrom(synthetic_octahedron_complex.positions), dtype=float
+        )
+        tree = KDTree(positions)
+        sf = SurfaceFollowingSampler(
+            synthetic_octahedron_complex, d_max=d_max, probe=1.4
+        )
+        for _ in range(20):
+            sample = sf.generator()
+            nearest, _ = tree.query(sample.position, k=1)
+            assert nearest <= d_max + 1e-9, (
+                f"sample at {sample.position} is {nearest:.2f} Å "
+                f"from nearest atom, exceeds d_max={d_max}"
+            )
+
+    def test_samples_are_sas_clear(self, synthetic_octahedron_complex):
+        from maws.space import Excluder, SurfaceFollowingSampler
+
+        np.random.seed(0)
+        excluder = Excluder(synthetic_octahedron_complex, probe=1.4)
+        sf = SurfaceFollowingSampler(synthetic_octahedron_complex, d_max=6.0, probe=1.4)
+        for _ in range(20):
+            sample = sf.generator()
+            assert excluder.is_clear(sample.position)
+
+    def test_rejects_nonpositive_d_max(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import SurfaceFollowingSampler
+
+        with pytest.raises(ValueError, match="d_max must be > 0"):
+            SurfaceFollowingSampler(synthetic_octahedron_complex, d_max=0.0)
+        with pytest.raises(ValueError, match="d_max must be > 0"):
+            SurfaceFollowingSampler(synthetic_octahedron_complex, d_max=-1.0)
+
+
+class TestMakeSamplerModes:
+    def test_default_is_sphere(self, synthetic_octahedron_complex):
+        from maws.space import SurfaceSampler, make_sampler
+
+        s = make_sampler(synthetic_octahedron_complex)
+        assert isinstance(s, SurfaceSampler)
+
+    def test_explicit_sphere_mode(self, synthetic_octahedron_complex):
+        from maws.space import SurfaceSampler, make_sampler
+
+        s = make_sampler(synthetic_octahedron_complex, mode="sphere", reach=5.0)
+        assert isinstance(s, SurfaceSampler)
+
+    def test_surface_following_mode(self, synthetic_octahedron_complex):
+        from maws.space import SurfaceFollowingSampler, make_sampler
+
+        sf = make_sampler(
+            synthetic_octahedron_complex, mode="surface-following", d_max=6.0
+        )
+        assert isinstance(sf, SurfaceFollowingSampler)
+
+    def test_unknown_mode_raises(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="sphere|surface-following"):
+            make_sampler(synthetic_octahedron_complex, mode="bogus")
+
+    def test_negative_probe_rejected_for_both_modes(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="probe must be >= 0"):
+            make_sampler(synthetic_octahedron_complex, mode="sphere", probe=-1.0)
+        with pytest.raises(ValueError, match="probe must be >= 0"):
+            make_sampler(
+                synthetic_octahedron_complex,
+                mode="surface-following",
+                probe=-1.0,
+            )
+
+    def test_both_modes_yield_clear_samples(self, synthetic_octahedron_complex):
+        from maws.space import Excluder, make_sampler
+
+        excluder = Excluder(synthetic_octahedron_complex, probe=1.4)
+        for mode in ("sphere", "surface-following"):
+            np.random.seed(0)
+            s = make_sampler(synthetic_octahedron_complex, mode=mode)
+            for _ in range(10):
+                assert excluder.is_clear(s.generator().position)

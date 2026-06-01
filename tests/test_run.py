@@ -7,13 +7,10 @@ These tests require AmberTools/OpenMM and external binaries (e.g., tleap).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, cast
 
 import pytest
 
 from maws.run import MawsResult, MawsRunner
-
-ShapeT = Literal["cube", "sphere", "shell"]
 
 
 @pytest.mark.integration
@@ -51,34 +48,6 @@ def test_maws_runner_smoke(tmp_path: Path) -> None:
     assert result.pdb_path.endswith("test_api_RESULT.pdb")
     assert Path(result.pdb_path).exists()
     assert Path(result.pdb_path).stat().st_size > 0
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("shape", ["cube", "sphere", "shell"])
-def test_maws_runner_each_shape(tmp_path: Path, shape: str) -> None:
-    """End-to-end: each surface-aware envelope shape produces a result."""
-    pdb = Path("data/1BRQ.pdb")
-    if not pdb.exists():
-        pytest.skip("Test PDB not available (data/1BRQ.pdb).")
-
-    runner = MawsRunner(
-        num_nucleotides=1,
-        aptamer_type="RNA",
-        molecule_type="protein",
-        first_chunck_size=2,
-        second_chunck_size=2,
-        clean_pdb=True,
-        remove_h=True,
-        drop_hetatm=False,
-        verbose=False,
-        shape=cast(ShapeT, shape),
-    )
-
-    out_dir = tmp_path / "out"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    result = runner.run(pdb=pdb, name=f"test_{shape}", output_pdb=out_dir)
-    assert isinstance(result, MawsResult)
-    assert isinstance(result.sequence, str) and result.sequence.strip() != ""
 
 
 def test_runner_rejects_negative_reach() -> None:

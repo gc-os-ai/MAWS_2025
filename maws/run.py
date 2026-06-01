@@ -58,7 +58,6 @@ class MawsRunner:
         remove_h: bool = False,
         drop_hetatm: bool = False,
         verbose: bool = False,
-        shape: Literal["cube", "sphere", "shell"] = "shell",
         reach: float = 10.0,
         probe: float = 1.4,
     ) -> None:
@@ -82,7 +81,6 @@ class MawsRunner:
         self.remove_h = remove_h
         self.drop_hetatm = drop_hetatm
         self.verbose = verbose
-        self.shape = shape
         self.reach = reach
         self.probe = probe
 
@@ -203,12 +201,7 @@ class MawsRunner:
         )
         ligand_only.build()
 
-        sampler = space.make_sampler(
-            self.shape,
-            ligand_only,
-            reach=self.reach,
-            probe=self.probe,
-        )
+        sampler = space.make_sampler(ligand_only, reach=self.reach, probe=self.probe)
         rotations = space.NAngles(N_BACKBONE_TORSIONS)
 
         # Track best candidate across steps

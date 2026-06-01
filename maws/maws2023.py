@@ -107,12 +107,6 @@ def parse_args():
         help="Cleaner: drop all HETATM records (NOT recommended for small molecules).",
     )
     parser.add_argument(
-        "--shape",
-        choices=["cube", "sphere", "shell"],
-        default="shell",
-        help="Sampling envelope shape. Default: shell (hugs the surface tightly).",
-    )
-    parser.add_argument(
         "--reach",
         type=_non_negative_float,
         default=10.0,
@@ -249,12 +243,7 @@ def main():
         c.build()
 
         # Surface-aware sampler around the ligand (auto-sized envelope + SAS rejection)
-        sampler = space.make_sampler(
-            args.shape,
-            c,
-            reach=args.reach,
-            probe=args.probe,
-        )
+        sampler = space.make_sampler(c, reach=args.reach, probe=args.probe)
         rotations = space.NAngles(N_ELEMENTS)
 
         # Tracking best candidate
