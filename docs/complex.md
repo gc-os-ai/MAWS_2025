@@ -16,8 +16,15 @@ Complex is the high-level container that:
 Complex(
     force_field_aptamer: str = "leaprc.RNA.OL3",
     force_field_ligand: str = "leaprc.protein.ff19SB",
+    salt_conc: float = 0.15,
 )
 ```
+
+`salt_conc` is the monovalent salt concentration (mol/L) used for the GB
+implicit-solvent Debye–Hückel screening term passed to `createSystem`. The
+default (~physiological, 150 mM) screens the highly charged nucleic-acid
+backbone; `salt_conc=0.0` reproduces the older unscreened behavior. The GB
+screening is monovalent only and does not model divalent ions such as Mg²⁺.
 
 ## Attributes
 
@@ -32,6 +39,7 @@ Complex(
 | `prmtop` | `AmberPrmtopFile` | AMBER topology file |
 | `inpcrd` | `AmberInpcrdFile` | AMBER coordinate file |
 | `build_string` | `str` | LEaP force field preamble |
+| `salt_conc` | `float` | Monovalent salt conc. (mol/L) for GB Debye–Hückel screening |
 
 ## Methods
 

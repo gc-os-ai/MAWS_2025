@@ -41,6 +41,14 @@ config = MAWSConfig(
 | `verbose` | `bool` | `True` | Log progress to console |
 | `reach` | `float` | `10.0` | Distance the envelope extends past the ligand surface (Å) |
 | `probe` | `float` | `1.4` | vdW probe radius for SAS rejection (Å, water-equivalent) |
+| `salt_conc` | `float` | `0.15` | Monovalent salt conc. (mol/L) for GB Debye–Hückel screening; `0` = unscreened |
+
+> **Note (2026): behavior change.** `salt_conc` defaults to `0.15` mol/L
+> (~physiological) so the GB implicit solvent now screens the highly charged
+> nucleic-acid backbone. Earlier releases ran unscreened (`0.0` mol/L), so
+> computed energies — and therefore the sequences MAWS selects — will differ
+> from prior versions unless you pass `salt_conc=0.0` (`--salt-conc 0` on the
+> CLI). The screening is monovalent only and does not model Mg²⁺.
 
 > **Note (2026):** the initial pose search now restricts samples to the
 > region just outside the ligand surface, computed automatically from

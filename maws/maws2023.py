@@ -118,6 +118,16 @@ def parse_args():
         default=1.4,
         help="vdW probe radius for SAS rejection (Å). Default: 1.4 (water-like).",
     )
+    parser.add_argument(
+        "--salt-conc",
+        type=_non_negative_float,
+        default=0.15,
+        help=(
+            "Monovalent salt concentration (mol/L) for GB implicit-solvent "
+            "Debye-Hückel screening. Default: 0.15 (physiological); 0 = unscreened. "
+            "Monovalent only (does not model Mg²⁺)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -186,6 +196,7 @@ def main():
             N_NTIDES + 1,
         )
         logger.info("Value of beta: %s", BETA)
+        logger.info("Salt concentration (GB screening, mol/L): %s", args.salt_conc)
         logger.info("Start time: %s", datetime.now())
 
         # Choose aptamer FF and residue
@@ -220,6 +231,7 @@ def main():
         cpx = Complex(
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
+            salt_conc=args.salt_conc,
         )
         cpx.add_chain("", molecule)  # empty aptamer chain (sequence added later)
         cpx.add_chain_from_pdb(
@@ -233,6 +245,7 @@ def main():
         c = Complex(
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
+            salt_conc=args.salt_conc,
         )
         c.add_chain_from_pdb(
             pdb_path=PDB_PATH,

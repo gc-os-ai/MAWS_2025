@@ -51,6 +51,7 @@ class Complex:
         self,
         force_field_aptamer: str = "leaprc.RNA.OL3",
         force_field_ligand: str = "leaprc.protein.ff19SB",
+        salt_conc: float = 0.15,
     ):
         """
         Parameters
@@ -59,11 +60,18 @@ class Complex:
             LEaP ``source`` line for the nucleic-acid FF (e.g., RNA.OL3/DNA.OL21).
         force_field_ligand : str, default="leaprc.protein.ff19SB"
             LEaP ``source`` line for the ligand/protein/small-molecule FF.
+        salt_conc : float, default=0.15
+            Monovalent salt concentration (mol/L) for the GB implicit-solvent
+            Debye-Hückel screening term. The default (~physiological, 150 mM)
+            screens the highly charged backbone; ``0.0`` reproduces the old
+            unscreened behavior. Note: GB screening is monovalent only and does
+            not model divalent ions such as Mg²⁺.
         """
         self.build_string = f"""
                             source {force_field_aptamer}
                             source {force_field_ligand}
                             """
+        self.salt_conc = salt_conc
         self.prmtop: app.AmberPrmtopFile | None = None
         self.inpcrd: app.AmberInpcrdFile | None = None
         self.positions: list[mm.Vec3] | None = None
@@ -436,13 +444,23 @@ class Complex:
         self.integrator = mm.LangevinIntegrator(
             300.0 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
         )
-        self.system = self.prmtop.createSystem(
+        self.system = self._make_system()
+        self.simulation = self._create_simulation()
+
+    def _make_system(self) -> mm.System:
+        """
+        Create the OpenMM ``System`` from the loaded prmtop.
+
+        Isolated from :meth:`build` so the implicit-solvent settings (notably
+        the salt-screening term) can be exercised without running LEaP.
+        """
+        return self.prmtop.createSystem(
             nonbondedCutoff=5 * unit.angstrom,
             nonbondedMethod=app.NoCutoff,
             constraints=None,
             implicitSolvent=app.OBC1,
+            implicitSolventSaltConc=self.salt_conc * unit.molar,
         )
-        self.simulation = self._create_simulation()
 
     # ---------------------------------  Geometry ops  ------------------------------
 

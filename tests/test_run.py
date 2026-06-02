@@ -70,3 +70,85 @@ def test_runner_rejects_negative_probe() -> None:
             molecule_type="protein",
             probe=-1.0,
         )
+
+
+def test_runner_rejects_negative_salt_conc() -> None:
+    """MawsRunner raises ValueError on negative salt_conc (no integration setup)."""
+    with pytest.raises(ValueError, match="salt_conc must be >= 0"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            salt_conc=-0.1,
+        )
+
+
+def test_runner_default_salt_conc() -> None:
+    """MawsRunner defaults salt_conc to physiological 0.15 mol/L."""
+    runner = MawsRunner(
+        num_nucleotides=1,
+        aptamer_type="RNA",
+        molecule_type="protein",
+    )
+    assert runner.salt_conc == 0.15
+
+
+def test_runner_accepts_zero_salt_conc() -> None:
+    """salt_conc=0.0 (documented unscreened mode) is accepted, not rejected."""
+    runner = MawsRunner(
+        num_nucleotides=1,
+        aptamer_type="RNA",
+        molecule_type="protein",
+        salt_conc=0.0,
+    )
+    assert runner.salt_conc == 0.0
+
+
+def test_run_threads_salt_conc_into_every_complex(monkeypatch) -> None:
+    """run() passes salt_conc into every Complex construction (wiring coverage).
+
+    Locks the end-to-end seam without LEaP/OpenMM: a recording double captures
+    constructor kwargs and a sentinel halts run() right after the builds.
+    """
+    import maws.run as run_mod
+
+    constructed: list[dict] = []
+
+    class _RecordingComplex:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
+        def add_chain(self, *args, **kwargs):
+            pass
+
+        def add_chain_from_pdb(self, *args, **kwargs):
+            pass
+
+        def build(self, *args, **kwargs):
+            pass
+
+    class _StopHereError(Exception):
+        pass
+
+    def _stop(*args, **kwargs):
+        raise _StopHereError
+
+    monkeypatch.setattr(run_mod, "Complex", _RecordingComplex)
+    monkeypatch.setattr(
+        run_mod, "resolve_pdb_path", lambda *a, **k: ("lig.pdb", "lig.pdb")
+    )
+    monkeypatch.setattr(run_mod.space, "make_sampler", _stop)
+
+    runner = MawsRunner(
+        num_nucleotides=1,
+        aptamer_type="RNA",
+        molecule_type="protein",
+        salt_conc=0.3,
+    )
+
+    with pytest.raises(_StopHereError):
+        runner.run(pdb="lig.pdb")
+
+    # Both the template complex and the ligand-only complex must be built.
+    assert len(constructed) == 2
+    assert all(kwargs.get("salt_conc") == 0.3 for kwargs in constructed)
