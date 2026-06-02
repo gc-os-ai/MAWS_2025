@@ -60,6 +60,7 @@ class MawsRunner:
         verbose: bool = False,
         reach: float = 10.0,
         probe: float = 1.4,
+        salt_conc: float = 0.15,
     ) -> None:
         if num_nucleotides <= 0:
             raise ValueError("num_nucleotides couldn't be less than 0")
@@ -69,6 +70,8 @@ class MawsRunner:
             raise ValueError(f"reach must be >= 0, got {reach}")
         if probe < 0:
             raise ValueError(f"probe must be >= 0, got {probe}")
+        if salt_conc < 0:
+            raise ValueError(f"salt_conc must be >= 0, got {salt_conc}")
 
         self.num_nucleotides = num_nucleotides
         self.aptamer_type = aptamer_type
@@ -83,6 +86,7 @@ class MawsRunner:
         self.verbose = verbose
         self.reach = reach
         self.probe = probe
+        self.salt_conc = salt_conc
 
     def run(
         self,
@@ -121,7 +125,8 @@ class MawsRunner:
             log.info("MAWS run started: name=%s", name)
         log.debug(
             "Config: num_nucleotides=%d aptamer_type=%s molecule_type=%s beta=%s "
-            "c1=%d c2=%d clean_pdb=%s keep_chains=%s remove_h=%s drop_hetatm=%s",
+            "c1=%d c2=%d clean_pdb=%s keep_chains=%s remove_h=%s drop_hetatm=%s "
+            "salt_conc=%s",
             self.num_nucleotides,
             self.aptamer_type,
             self.molecule_type,
@@ -132,6 +137,7 @@ class MawsRunner:
             self.keep_chains,
             self.remove_h,
             self.drop_hetatm,
+            self.salt_conc,
         )
 
         # Resolve (and optionally clean) the PDB path before LEaP calls
@@ -179,6 +185,7 @@ class MawsRunner:
         cpx = Complex(
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
+            salt_conc=self.salt_conc,
         )
         cpx.add_chain("", molecule)  # empty aptamer chain
         cpx.add_chain_from_pdb(
@@ -192,6 +199,7 @@ class MawsRunner:
         ligand_only = Complex(
             force_field_aptamer=force_field_aptamer,
             force_field_ligand=force_field_ligand,
+            salt_conc=self.salt_conc,
         )
         ligand_only.add_chain_from_pdb(
             pdb_path=pdb_path,

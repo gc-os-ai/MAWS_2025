@@ -50,6 +50,79 @@ class TestComplexInit:
         assert "DNA.OL21" in cpx.build_string
         assert "gaff2" in cpx.build_string
 
+    def test_complex_default_salt_conc(self):
+        """Complex defaults to physiological monovalent salt (0.15 mol/L)."""
+        cpx = Complex()
+        assert cpx.salt_conc == 0.15
+
+    def test_complex_custom_salt_conc(self):
+        """Complex stores a custom salt concentration."""
+        cpx = Complex(salt_conc=0.3)
+        assert cpx.salt_conc == 0.3
+
+    def test_complex_zero_salt_conc(self):
+        """salt_conc=0.0 (documented unscreened mode) is a valid, stored value."""
+        cpx = Complex(salt_conc=0.0)
+        assert cpx.salt_conc == 0.0
+
+
+class _FakePrmtop:
+    """Records the kwargs passed to createSystem (no OpenMM build required)."""
+
+    def __init__(self):
+        self.create_system_kwargs = None
+
+    def createSystem(self, **kwargs):  # noqa: N802 (mirrors OpenMM API)
+        self.create_system_kwargs = kwargs
+        return "SYSTEM_SENTINEL"
+
+
+class TestComplexMakeSystem:
+    """Tests that salt concentration is threaded into createSystem."""
+
+    def test_make_system_passes_salt_conc(self):
+        """_make_system forwards salt_conc as a Debye-Hückel screening term."""
+        from openmm import unit
+
+        cpx = Complex(salt_conc=0.2)
+        cpx.prmtop = _FakePrmtop()
+
+        system = cpx._make_system()
+
+        assert system == "SYSTEM_SENTINEL"
+        assert (
+            cpx.prmtop.create_system_kwargs["implicitSolventSaltConc"]
+            == 0.2 * unit.molar
+        )
+
+    def test_make_system_uses_default_salt_conc(self):
+        """Default Complex feeds 0.15 mol/L into createSystem."""
+        from openmm import unit
+
+        cpx = Complex()
+        cpx.prmtop = _FakePrmtop()
+
+        cpx._make_system()
+
+        assert (
+            cpx.prmtop.create_system_kwargs["implicitSolventSaltConc"]
+            == 0.15 * unit.molar
+        )
+
+    def test_make_system_zero_salt_conc_is_unscreened(self):
+        """salt_conc=0.0 forwards 0 mol/L (reproduces the old unscreened build)."""
+        from openmm import unit
+
+        cpx = Complex(salt_conc=0.0)
+        cpx.prmtop = _FakePrmtop()
+
+        cpx._make_system()
+
+        assert (
+            cpx.prmtop.create_system_kwargs["implicitSolventSaltConc"]
+            == 0.0 * unit.molar
+        )
+
 
 class TestComplexAddChain:
     """Tests for Complex.add_chain() method."""

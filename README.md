@@ -27,6 +27,21 @@ d_max=...)`) is also implemented for users who want accepted poses
 concentrated near the molecular surface; see [docs/space.md](docs/space.md)
 for the full API.
 
+### Implicit-solvent salt screening
+
+Energies are evaluated with the GB-OBC1 implicit solvent. The monovalent
+salt concentration used for Debye–Hückel screening is configurable:
+
+* `--salt-conc FLOAT` — monovalent salt concentration in mol/L (default
+  `0.15`, ~physiological). Also available as the `salt_conc` keyword on
+  `maws.run.MawsRunner` and `maws.complex.Complex`.
+
+> **Behavior change:** earlier releases ran unscreened (effectively
+> `0.0` mol/L). Because screening changes the GB energies that drive
+> sequence selection, results will differ from prior versions unless you
+> pass `--salt-conc 0`. The screening is monovalent only and does not
+> model divalent ions such as Mg²⁺.
+
 ### original readme
 
 https://github.com/gc-os-ai/MAWS_2025/blob/main/README_orig.md
