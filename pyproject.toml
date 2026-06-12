@@ -8,6 +8,30 @@ version = "0.1.0.dev0"
 description = "MAWS: residue-based chemistry, complex preparation, and OpenMM routines for aptamer workflows"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
+license = { file = "LICENSE" }
+authors = [
+  { name = "German Center for Open Source AI", email = "info@gcos.ai" },
+]
+maintainers = [
+  { name = "German Center for Open Source AI", email = "info@gcos.ai" },
+]
+keywords = [
+  "aptamer",
+  "bioinformatics",
+  "maws",
+  "molecular-docking",
+  "openmm",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 
 # Runtime dependencies
 dependencies = [
@@ -29,6 +53,12 @@ dev = [
 gpu = [
   "openmm-cuda",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gc-os-ai/MAWS_2025"
+Repository = "https://github.com/gc-os-ai/MAWS_2025"
+Issues = "https://github.com/gc-os-ai/MAWS_2025/issues"
+Pyaptamer = "https://github.com/gc-os-ai/pyaptamer"
 
 [tool.setuptools]
 include-package-data = true
