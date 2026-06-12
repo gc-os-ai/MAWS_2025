@@ -100,12 +100,35 @@ def make_lib(
         w = Path(td)
 
         if not parameterized:
+            # Match antechamber/parmchk2 to the ligand force field. maws sources
+            # leaprc.gaff2 for organics, so atoms must be typed with gaff2; the
+            # default "gaff" produces an empty frcmod and missing parameters,
+            # making saveamberparm fail.
+            ante_at = "gaff2" if "gaff2" in force_field_ligand else atom_type
+            parmchk_set = "gaff2" if ante_at == "gaff2" else "gaff"
+
+            # antechamber input. Strip PDB CONECT records first: tools like RDKit
+            # encode double/aromatic bonds as repeated CONECT entries, which
+            # antechamber turns into duplicate bonds that LEaP rejects ("cannot
+            # add bond"). Let antechamber perceive connectivity from geometry.
+            ante_in = str(src)
+            if ext == "pdb":
+                stripped = w / f"{name}_noconect.pdb"
+                stripped.write_text(
+                    "".join(
+                        line
+                        for line in src.read_text().splitlines(keepends=True)
+                        if not line.startswith("CONECT")
+                    )
+                )
+                ante_in = str(stripped)
+
             # antechamber: input may be pdb/mol2/sdf...; output is temp/{name}.mol2
             run(
                 [
                     find_exe("antechamber"),
                     "-i",
-                    str(src),
+                    ante_in,
                     "-fi",
                     ext,
                     "-o",
@@ -117,12 +140,12 @@ def make_lib(
                     "-rn",
                     residue_name,
                     "-at",
-                    atom_type,
+                    ante_at,
                 ],
                 cwd=w,
             )
 
-            # parmchk2 → temp/{residue_name}.frcmod
+            # parmchk2 → temp/{residue_name}.frcmod (-s matches the atom-type set)
             run(
                 [
                     find_exe("parmchk2"),
@@ -132,6 +155,8 @@ def make_lib(
                     "mol2",
                     "-o",
                     f"{residue_name}.frcmod",
+                    "-s",
+                    parmchk_set,
                 ],
                 cwd=w,
             )
