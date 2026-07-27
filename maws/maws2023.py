@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # MAWS is part of the sharksome software suite
 # This software is published under MIT license
 # COPYRIGHT 2017 Michael Jendrusch
@@ -18,7 +17,7 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
-from maws.routines import S
+from maws.routines import entropy_score
 
 # VERSION = "2.1" # Original Authoras To-do: cite in readme
 # RELEASE_DATE = "2017" # Original Authors To-do: cite in readme
@@ -306,7 +305,7 @@ def main():
                 # Reset for next sample
                 cx.positions = positions0[:]
 
-            entropy = S(energies, beta=BETA)
+            entropy = entropy_score(energies, beta=BETA)
 
             # # Outputs
             # with open(f"{JOB_NAME}_1_{ntide}.pdb", "w") as pdblog:
@@ -401,7 +400,7 @@ def main():
 
                         cx.positions = positions0[:]
 
-                    entropy = S(energies, beta=BETA)
+                    entropy = entropy_score(energies, beta=BETA)
 
                     logger.info(
                         "Step %d: finished candidate sequence %s "

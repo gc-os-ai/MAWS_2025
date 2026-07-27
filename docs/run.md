@@ -4,21 +4,25 @@
 
 ## Overview
 
-The `maws.run` module provides a clean Python API for running MAWS without using the CLI. It uses dataclasses for configuration and results.
+The `maws.run` module provides a clean Python API for running MAWS without using the CLI. Construct a [`MawsRunner`](#mawsrunner) with the design parameters, then call [`run`](#mawsrunnerrun) once per ligand. It returns a [`MawsResult`](#mawsresult) dataclass.
+
+Both names are re-exported from the package root:
+
+```python
+from maws import MawsRunner, MawsResult
+```
 
 ## Classes
 
-### MAWSConfig
+### MawsRunner
 
-Configuration for a MAWS aptamer design run.
+Holds the configuration for a MAWS aptamer design run. All constructor arguments are **keyword-only**.
 
 ```python
-from maws import MAWSConfig
+from maws import MawsRunner
 
-config = MAWSConfig(
-    pdb_path="ligand.pdb",
+runner = MawsRunner(
     num_nucleotides=15,
-    name="my_aptamer",
     aptamer_type="RNA",
     molecule_type="protein",
 )
@@ -26,22 +30,24 @@ config = MAWSConfig(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `pdb_path` | `str` | *required* | Path to ligand PDB file |
-| `num_nucleotides` | `int` | *required* | Number of nucleotides |
-| `name` | `str` | `"MAWS_aptamer"` | Job name (for output files) |
-| `aptamer_type` | `"RNA"` or `"DNA"` | `"RNA"` | Aptamer type |
-| `molecule_type` | `"protein"`, `"organic"`, `"lipid"` | `"protein"` | Ligand type |
-| `beta` | `float` | `0.01` | Inverse temperature for sampling |
+| `num_nucleotides` | `int` | *required* | Number of nucleotides to design |
+| `aptamer_type` | `"RNA"` or `"DNA"` | *required* | Aptamer type |
+| `molecule_type` | `"protein"`, `"organic"`, `"lipid"` | *required* | Ligand type |
+| `beta` | `float` | `0.01` | Inverse temperature for the entropy score (see [docs/routines.md](routines.md)) |
 | `first_chunk_size` | `int` | `5000` | Samples in first step |
 | `second_chunk_size` | `int` | `5000` | Samples in subsequent steps |
 | `clean_pdb` | `bool` | `False` | Clean input PDB |
 | `keep_chains` | `str` | `"all"` | Chain policy for cleaner |
 | `remove_h` | `bool` | `False` | Remove hydrogens |
 | `drop_hetatm` | `bool` | `False` | Drop HETATM records |
-| `verbose` | `bool` | `True` | Log progress to console |
+| `verbose` | `bool` | `False` | Log progress at INFO instead of DEBUG |
 | `reach` | `float` | `10.0` | Distance the envelope extends past the ligand surface (Å) |
 | `probe` | `float` | `1.4` | vdW probe radius for SAS rejection (Å, water-equivalent) |
 | `salt_conc` | `float` | `0.15` | Monovalent salt conc. (mol/L) for GB Debye–Hückel screening; `0` = unscreened |
+
+The constructor raises `ValueError` for `num_nucleotides <= 0`, a non-positive chunk size, or a negative `reach`, `probe`, or `salt_conc`.
+
+The ligand PDB path is **not** a constructor argument — it is passed to `run()`, so one configured runner can be reused across several ligands.
 
 > **Note (2026): behavior change.** `salt_conc` defaults to `0.15` mol/L
 > (~physiological) so the GB implicit solvent now screens the highly charged
@@ -58,113 +64,129 @@ config = MAWSConfig(
 > but is not exposed through `MawsRunner`. See
 > [docs/space.md](space.md) for the underlying API.
 
-### MAWSResult
+#### MawsRunner.run
 
-Result of a MAWS aptamer design run.
+```python
+run(*, pdb, name="MAWS_aptamer", output_pdb=None) -> MawsResult
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `pdb` | `str \| Path` | *required* | Input ligand PDB file path |
+| `name` | `str` | `"MAWS_aptamer"` | Run name, used for log context and artifact naming |
+| `output_pdb` | `str \| Path \| None` | `None` | Where to write the result structure. If `None`, no PDB is written |
+
+`output_pdb` is interpreted two ways: an existing **directory** gets `{name}_RESULT.pdb` written inside it; anything else is treated as the exact output file path, with parent directories created as needed.
+
+### MawsResult
+
+Frozen dataclass returned by `MawsRunner.run`.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `sequence` | `str` | Best aptamer sequence found |
-| `energy` | `float` | Final energy |
-| `entropy` | `float` | Final entropy score |
-| `complex` | `Complex` | OpenMM Complex with final structure |
-| `config` | `MAWSConfig` | Configuration used |
-| `pdb_path` | `str` | Path to result PDB file |
-
-#### Methods
-
-**`save_pdb(path: str) -> str`**: Save result structure to PDB file.
-
-## Functions
-
-### run_maws
-
-Run the MAWS aptamer design algorithm.
-
-```python
-from maws import run_maws, MAWSConfig
-
-config = MAWSConfig(
-    pdb_path="data/ligand.pdb",
-    num_nucleotides=15,
-)
-
-result = run_maws(config)
-
-print(result.sequence)  # Best aptamer sequence
-result.save_pdb("final.pdb")
-```
+| `energy` | `float` | Energy of the final best configuration; `nan` if no candidate was scored |
+| `entropy` | `float` | Entropy score used for selection (`maws.routines.entropy_score`; ≤ 0, lower is better) |
+| `pdb_path` | `str \| None` | Path to the written PDB, or `None` when `output_pdb` was not given |
 
 ## Usage Examples
 
 ### Basic Run
 
 ```python
-from maws import run_maws, MAWSConfig
+from maws import MawsRunner
 
-# Configure
-config = MAWSConfig(
-    pdb_path="protein.pdb",
+runner = MawsRunner(
     num_nucleotides=20,
     aptamer_type="RNA",
     molecule_type="protein",
 )
 
-# Run
-result = run_maws(config)
+result = runner.run(pdb="protein.pdb", name="my_aptamer", output_pdb="results/")
 
-# Results
 print(f"Best sequence: {result.sequence}")
 print(f"Energy: {result.energy}")
+print(f"Entropy: {result.entropy}")
 print(f"Saved to: {result.pdb_path}")
 ```
 
 ### With PDB Cleaning
 
 ```python
-config = MAWSConfig(
-    pdb_path="messy_protein.pdb",
+runner = MawsRunner(
     num_nucleotides=15,
+    aptamer_type="RNA",
+    molecule_type="protein",
     clean_pdb=True,
     remove_h=True,
     drop_hetatm=True,
     keep_chains="A,B",
 )
 
-result = run_maws(config)
+result = runner.run(pdb="messy_protein.pdb")
 ```
 
 ### DNA Aptamer for Small Molecule
 
 ```python
-config = MAWSConfig(
-    pdb_path="drug.pdb",
+runner = MawsRunner(
     num_nucleotides=25,
     aptamer_type="DNA",
     molecule_type="organic",
 )
 
-result = run_maws(config)
+result = runner.run(pdb="drug.pdb")
 ```
 
 ### Quick Test Run
 
 ```python
-config = MAWSConfig(
-    pdb_path="ligand.pdb",
+runner = MawsRunner(
     num_nucleotides=3,
+    aptamer_type="RNA",
+    molecule_type="protein",
     first_chunk_size=10,
     second_chunk_size=10,
-    verbose=False,
 )
 
-result = run_maws(config)
+result = runner.run(pdb="ligand.pdb")
+```
+
+### Screening Several Ligands
+
+One runner can be reused, since the PDB is an argument to `run()`:
+
+```python
+runner = MawsRunner(
+    num_nucleotides=15,
+    aptamer_type="RNA",
+    molecule_type="protein",
+)
+
+results = {
+    target: runner.run(pdb=f"{target}.pdb", name=target, output_pdb="results/")
+    for target in ("1BRQ", "1HAO")
+}
+
+for target, result in sorted(results.items(), key=lambda kv: kv[1].entropy):
+    print(target, result.sequence, result.entropy)
+```
+
+## Logging
+
+`MawsRunner` logs through the standard `logging` module under the `maws.run` logger; it does not configure handlers itself. `verbose=True` promotes a handful of progress messages from DEBUG to INFO. To see output, configure logging in your own code:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
 ```
 
 ## Output Files
 
-- `{name}_output.log` - Log file
-- `{name}_RESULT.pdb` - Final structure PDB
+- `{name}_RESULT.pdb` - Final structure PDB, written only when `output_pdb` is given
+
+The CLI (`maws.maws2023`) additionally writes `{name}_output.log`.
 
 ## Environment Variables
 

@@ -23,8 +23,8 @@ def test_maws_runner_smoke(tmp_path: Path) -> None:
         num_nucleotides=1,
         aptamer_type="RNA",
         molecule_type="protein",
-        first_chunck_size=2,
-        second_chunck_size=2,
+        first_chunk_size=2,
+        second_chunk_size=2,
         clean_pdb=True,
         remove_h=True,
         drop_hetatm=False,
@@ -81,6 +81,34 @@ def test_runner_rejects_negative_salt_conc() -> None:
             molecule_type="protein",
             salt_conc=-0.1,
         )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"), [(0, 5000), (5000, 0), (-1, 5000), (5000, -1)]
+)
+def test_runner_rejects_non_positive_chunk_size(first: int, second: int) -> None:
+    """MawsRunner raises ValueError on a chunk size that is not positive."""
+    with pytest.raises(ValueError, match="Chunk size must be greater than 0"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            first_chunk_size=first,
+            second_chunk_size=second,
+        )
+
+
+def test_runner_chunk_size_kwargs_reach_attributes() -> None:
+    """Chunk-size kwargs are spelled 'chunk' and land on the matching attributes."""
+    runner = MawsRunner(
+        num_nucleotides=1,
+        aptamer_type="RNA",
+        molecule_type="protein",
+        first_chunk_size=7,
+        second_chunk_size=11,
+    )
+    assert runner.first_chunk_size == 7
+    assert runner.second_chunk_size == 11
 
 
 def test_runner_default_salt_conc() -> None:

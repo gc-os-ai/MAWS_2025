@@ -13,7 +13,7 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
-from maws.routines import S
+from maws.routines import entropy_score
 
 AptamerType = Literal["RNA", "DNA"]
 MoleculeType = Literal["protein", "organic", "lipid"]
@@ -51,8 +51,8 @@ class MawsRunner:
         aptamer_type: AptamerType,
         molecule_type: MoleculeType,
         beta: float = 0.01,
-        first_chunck_size: int = 5000,
-        second_chunck_size: int = 5000,
+        first_chunk_size: int = 5000,
+        second_chunk_size: int = 5000,
         clean_pdb: bool = False,
         keep_chains: str = "all",
         remove_h: bool = False,
@@ -64,8 +64,8 @@ class MawsRunner:
     ) -> None:
         if num_nucleotides <= 0:
             raise ValueError("num_nucleotides couldn't be less than 0")
-        if first_chunck_size <= 0 or second_chunck_size <= 0:
-            raise ValueError("Chunck size must be greater than 0")
+        if first_chunk_size <= 0 or second_chunk_size <= 0:
+            raise ValueError("Chunk size must be greater than 0")
         if reach < 0:
             raise ValueError(f"reach must be >= 0, got {reach}")
         if probe < 0:
@@ -77,8 +77,8 @@ class MawsRunner:
         self.aptamer_type = aptamer_type
         self.molecule_type = molecule_type
         self.beta = beta
-        self.first_chunk_size = first_chunck_size
-        self.second_chunk_size = second_chunck_size
+        self.first_chunk_size = first_chunk_size
+        self.second_chunk_size = second_chunk_size
         self.clean_pdb = clean_pdb
         self.keep_chains = keep_chains
         self.remove_h = remove_h
@@ -109,12 +109,10 @@ class MawsRunner:
               - if it's an existing directory -> writes `{name}_RESULT.pdb` inside it
               - otherwise treated as the exact output file path (parent dirs created)
             If None, no PDB is written.
-        logger : logging.Logger | None
-            Logger to use. If None, uses module logger.
 
         Returns
         -------
-        MAWSResult
+        MawsResult
         """
         N_BACKBONE_TORSIONS = (
             4  # MAWS rotates 4 backbone torsions per residue in this implementation
@@ -254,7 +252,7 @@ class MawsRunner:
 
                 cx.positions = positions0[:]
 
-            entropy = S(energies, beta=self.beta)
+            entropy = entropy_score(energies, beta=self.beta)
             log.debug(
                 "Step1 candidate=%s entropy=%s best_E=%s",
                 aptamer.alias_sequence,
@@ -334,7 +332,7 @@ class MawsRunner:
 
                         cx.positions = positions0[:]
 
-                    entropy = S(energies, beta=self.beta)
+                    entropy = entropy_score(energies, beta=self.beta)
                     log.debug(
                         "Step%d candidate=%s (%s %s) entropy=%s best_E=%s",
                         i + 1,
