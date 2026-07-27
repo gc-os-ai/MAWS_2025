@@ -78,11 +78,21 @@ def entropy_score(sample, beta=0.01):
     float
         Entropy of the Boltzmann distribution over sampled energies.
 
+    Raises
+    ------
+    ValueError
+        If `sample` is empty. There is no distribution to score, so no value
+        would be meaningful.
+
     Examples
     --------
     >>> round(entropy_score([100.0, 150.0, 200.0], beta=0.01), 6)
     -0.078421
     """
-    probabilities, _ = _boltzmann(sample, beta)
+    energies = np.asarray(sample, dtype=float)
+    if energies.size == 0:
+        raise ValueError("sample must contain at least one energy value")
+
+    probabilities, _ = _boltzmann(energies, beta)
     uniform = np.full(probabilities.size, 1.0 / probabilities.size)
     return -float(_relative_entropy(probabilities, uniform))

@@ -63,7 +63,9 @@ class MawsRunner:
         salt_conc: float = 0.15,
     ) -> None:
         if num_nucleotides <= 0:
-            raise ValueError("num_nucleotides couldn't be less than 0")
+            raise ValueError(
+                f"num_nucleotides must be greater than 0, got {num_nucleotides}"
+            )
         if first_chunk_size <= 0 or second_chunk_size <= 0:
             raise ValueError("Chunk size must be greater than 0")
         if reach < 0:

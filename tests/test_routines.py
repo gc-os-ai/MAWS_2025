@@ -43,6 +43,12 @@ class TestEntropyScore:
         """Identical energies give a uniform distribution, which scores 0."""
         assert entropy_score([100.0] * 4, beta=0.01) == pytest.approx(0.0, abs=1e-10)
 
+    @pytest.mark.parametrize("empty", [[], (), np.array([])])
+    def test_rejects_empty_sample(self, empty):
+        """An empty sample raises ValueError, not ZeroDivisionError."""
+        with pytest.raises(ValueError, match="at least one energy value"):
+            entropy_score(empty, beta=0.01)
+
     def test_is_non_positive(self):
         """The score is -KL(P || uniform), so it never exceeds 0."""
         rng = np.random.default_rng(0)

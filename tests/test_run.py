@@ -83,6 +83,20 @@ def test_runner_rejects_negative_salt_conc() -> None:
         )
 
 
+@pytest.mark.parametrize("num_nucleotides", [0, -1])
+def test_runner_rejects_non_positive_num_nucleotides(num_nucleotides: int) -> None:
+    """MawsRunner rejects num_nucleotides <= 0 with a message matching the check."""
+    with pytest.raises(
+        ValueError,
+        match=f"num_nucleotides must be greater than 0, got {num_nucleotides}",
+    ):
+        MawsRunner(
+            num_nucleotides=num_nucleotides,
+            aptamer_type="RNA",
+            molecule_type="protein",
+        )
+
+
 @pytest.mark.parametrize(
     ("first", "second"), [(0, 5000), (5000, 0), (-1, 5000), (5000, -1)]
 )

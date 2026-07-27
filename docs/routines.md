@@ -30,7 +30,7 @@ entropy_score(sample, beta=0.01) -> float
 | `sample` | array-like of `float` | *required* | Energy values (kJ/mol) from conformational sampling |
 | `beta` | `float` | `0.01` | Inverse temperature (1/kT in mol/kJ). Higher `beta` = sharper distribution |
 
-Returns a `float`.
+Returns a `float`. Raises `ValueError` if `sample` is empty — there is no distribution to score, so no return value would be meaningful.
 
 The energies are converted to a Boltzmann distribution `P(i) = exp(-beta * E_i) / Z`, and the score is
 
