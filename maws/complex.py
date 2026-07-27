@@ -953,7 +953,58 @@ class Complex:
                             energy = free_E
                             self.positions = positions[:]
 
-    def pert_min(self, size: float = 1e-1, iterations: int = 50) -> None:
+    def _freeze_particles(self, indices: Sequence[int]) -> dict[int, Quantity]:
+        """
+        Temporarily set the mass of ``indices`` to zero so they cannot move.
+
+        OpenMM's :class:`~openmm.LocalEnergyMinimizer` (and the integrators)
+        hold zero-mass particles fixed, so this is how a rigid region is
+        expressed. Zero mass affects dynamics only - the potential energy of a
+        configuration is unchanged.
+
+        Parameters
+        ----------
+        indices : Sequence[int]
+            Global atom indices to immobilize.
+
+        Returns
+        -------
+        dict[int, openmm.unit.Quantity]
+            The original masses, for :meth:`_restore_particle_masses`.
+        """
+        if not indices or self.system is None:
+            return {}
+
+        saved = {i: self.system.getParticleMass(i) for i in indices}
+        for i in indices:
+            self.system.setParticleMass(i, 0.0)
+        if self.simulation is not None:
+            self.simulation.context.reinitialize(preserveState=True)
+        return saved
+
+    def _restore_particle_masses(self, saved: dict[int, Quantity]) -> None:
+        """
+        Undo :meth:`_freeze_particles`, restoring the original masses.
+
+        Parameters
+        ----------
+        saved : dict[int, openmm.unit.Quantity]
+            Mapping returned by :meth:`_freeze_particles`.
+        """
+        if not saved or self.system is None:
+            return
+
+        for i, mass in saved.items():
+            self.system.setParticleMass(i, mass)
+        if self.simulation is not None:
+            self.simulation.context.reinitialize(preserveState=True)
+
+    def pert_min(
+        self,
+        size: float = 1e-1,
+        iterations: int = 50,
+        atoms: Sequence[int] | None = None,
+    ) -> None:
         """
         Chain-wriggling heuristic: apply small random kicks, then minimize.
 
@@ -963,8 +1014,31 @@ class Complex:
             Uniform kick magnitude in Å for each coordinate component.
         iterations : int, default=50
             Number of (kick → minimize) cycles to perform.
+        atoms : Sequence[int] or None, default=None
+            Global indices of the atoms allowed to move. Atoms outside this set
+            are neither kicked nor relaxed: their masses are set to zero for the
+            duration of the call, which pins them during minimization. ``None``
+            lets the **whole** complex move.
+
+        Notes
+        -----
+        In a MAWS run the docking target is rigid and only the aptamer chain may
+        move, so callers should pass that chain's atom range. Leaving ``atoms``
+        unset perturbs the target as well, which both randomizes the input
+        structure and lets the distortion accumulate across growth steps via the
+        carried-forward coordinates.
         """
-        for _repeat in range(iterations):
-            for i in range(len(self.positions)):
-                self.positions[i] += np.random.uniform(-size, size, 3) * unit.angstrom
-            self.minimize()
+        n_atoms = len(self.positions)
+        mobile = range(n_atoms) if atoms is None else list(atoms)
+        immobile = [] if atoms is None else sorted(set(range(n_atoms)) - set(mobile))
+
+        saved_masses = self._freeze_particles(immobile)
+        try:
+            for _repeat in range(iterations):
+                for i in mobile:
+                    self.positions[i] += (
+                        np.random.uniform(-size, size, 3) * unit.angstrom
+                    )
+                self.minimize()
+        finally:
+            self._restore_particle_masses(saved_masses)
