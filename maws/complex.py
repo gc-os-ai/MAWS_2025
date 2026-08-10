@@ -712,16 +712,26 @@ class Complex:
             If :attr:`positions` is not initialized.
         """
 
-        revised_element = element[:]
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
         pos = self.positions[:]
-        vec_a = pos[revised_element[1]] - pos[revised_element[0]]
-        if revised_element[2] <= revised_element[0]:
-            revised_element_1 = revised_element[1]
-            revised_element[1] = revised_element[2]
-            revised_element[2] = revised_element_1
-        self.rotate_global(revised_element, vec_a, angle, reverse=reverse, glob=False)
+        start, bond, end = element
+
+        # The axis is the bond itself, whichever fragment we end up turning.
+        vec_a = pos[bond] - pos[start]
+
+        if reverse:
+            # rotate_global(glob=False) turns [element[1], element[2]) and, when
+            # reverse is set, pivots on element[2]. Passing [start, end, bond]
+            # therefore turns [end, bond) about an axis running through the bond
+            # atom, which leaves both bonded atoms where they were.
+            self.rotate_global(
+                [start, end, bond], vec_a, angle, reverse=True, glob=False
+            )
+        else:
+            self.rotate_global(
+                [start, bond, end], vec_a, angle, reverse=False, glob=False
+            )
 
     def rotate_global(
         self,

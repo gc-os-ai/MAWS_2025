@@ -280,28 +280,20 @@ class Chain:
         This method converts chain-local indices to **global** atom indices by
         adding ``self.start``, then delegates to :meth:`Complex.rotate_element`.
         """
-        revised_element = element[:]
-        rev = reverse
-        if rev:
-            # Special handling: encode "complement" rotation into indices
-            if revised_element[2] is None:
-                revised_element[2] = 0
-            else:
-                revised_element[2] = revised_element[1]
-        rev = False
-
-        if len(revised_element) == 3 and revised_element[2] is not None:
-            revised_element = [idx + self.start for idx in revised_element]
-            self.complex.rotate_element(revised_element, angle, reverse=rev)
-        elif len(revised_element) == 3 and revised_element[2] is None:
-            revised_element = [
-                revised_element[0] + self.start,
-                revised_element[1] + self.start,
-                self.length + self.start,
-            ]
-            self.complex.rotate_element(revised_element, angle, reverse=rev)
-        else:
+        if len(element) != 3:
             raise ValueError("Rotable element contains too many or too few components!")
+        start, bond, end = element
+
+        # A reverse rotation turns the fragment *upstream* of the bond, so its
+        # range runs from the chain's first atom up to the bond atom. Forward
+        # runs from the bond atom to `end` (or the end of the chain).
+        end = 0 if reverse else (self.length if end is None else end)
+
+        self.complex.rotate_element(
+            [start + self.start, bond + self.start, end + self.start],
+            angle,
+            reverse=reverse,
+        )
 
     def rotate_in_residue(
         self,
@@ -338,38 +330,37 @@ class Chain:
         if residue_index < 0:
             revised_residue_index += len(self.sequence_array)
 
-        element = self.structure.rotating_elements[
-            self.sequence_array[revised_residue_index]
-        ][residue_element_index]
+        residue_name = self.sequence_array[revised_residue_index]
+        residue_length = self.structure.residue_length[residue_name]
+        offset = self.residues_start[revised_residue_index]
 
-        # Normalize possibly negative indices within the residue
-        for i in range(len(element)):
-            if element[i] and element[i] < 0:
-                element[i] += self.structure.residue_length[
-                    self.sequence_array[revised_residue_index]
-                ]
+        # Resolve every negative index, into a NEW list.
+        # Two things depend on this:
+        #   - all three indices must be absolute before any of them is used;
+        #     a half-normalised triple sends negative indices into range(),
+        #     which wraps them to the far end of the coordinate array
+        #   - rotating_elements holds templates shared by every chain, so
+        #     normalising in place would mutate the Structure itself
+        element = [
+            idx + residue_length if (idx is not None and idx < 0) else idx
+            for idx in self.structure.rotating_elements[residue_name][
+                residue_element_index
+            ]
+        ]
 
-            if element[2] is None:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    None,
-                ]
-            elif element[2] == 0:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    element[2],
-                ]
-            else:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    element[2] + self.residues_start[revised_residue_index],
-                ]
-                rev = False
+        if element[2] is None:
+            revised_element = [element[0] + offset, element[1] + offset, None]
+        elif element[2] == 0:
+            revised_element = [element[0] + offset, element[1] + offset, 0]
+        else:
+            revised_element = [
+                element[0] + offset,
+                element[1] + offset,
+                element[2] + offset,
+            ]
+            rev = False
 
-            self.rotate_element(revised_element, angle, reverse=rev)
+        self.rotate_element(revised_element, angle, reverse=rev)
 
     # ---- Compatibility helpers---------------------------
 
