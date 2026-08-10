@@ -170,9 +170,22 @@ energy, pos = cpx.step(1000)
 
 Experimental: random torsions + local minimization.
 
-#### `pert_min(size=0.1, iterations=50) -> float`
+#### `pert_min(size=0.1, iterations=50, atoms=None) -> None`
 
 Experimental: random kicks + minimization.
+
+`atoms` lists the global indices allowed to move. Everything outside that set is
+neither kicked nor relaxed — its mass is zeroed for the duration of the call and
+restored afterwards. When docking against a rigid target, pass the aptamer
+chain's atom range:
+
+```python
+aptamer = cpx.aptamer_chain()
+cpx.pert_min(size=0.5, atoms=range(aptamer.element[0], aptamer.element[2]))
+```
+
+The default `atoms=None` moves the **whole** complex, target included, and the
+distortion is carried forward through `best_positions` into the next growth step.
 
 ## Usage Example
 

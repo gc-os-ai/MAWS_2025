@@ -304,7 +304,11 @@ class MawsRunner:
                         aptamer.prepend_sequence(ntide)
 
                     cx.rebuild()
-                    cx.pert_min(size=0.5)
+                    # Only the aptamer may move: the docking target is rigid.
+                    cx.pert_min(
+                        size=0.5,
+                        atoms=range(aptamer.element[0], aptamer.element[2]),
+                    )
 
                     positions0 = cx.positions[:]
 

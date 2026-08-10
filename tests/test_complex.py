@@ -4,13 +4,21 @@ Unit tests for maws.complex module.
 These tests verify the Complex class's pure Python functionality:
 - initialization
 - chain management (add_chain, get_chain, aptamer_chain, ligand_chain)
-- No external dependencies (AmberTools/OpenMM not required for these tests)
+- pert_min's rigid-region handling, against a hand-built OpenMM System
+
+OpenMM is required (it is imported directly and via maws.complex), but
+AmberTools/LEaP is not: nothing here builds a real topology from a library.
 
 Note: Tests for build(), rebuild(), add_chain_from_pdb(), and rotation
 operations require AmberTools/OpenMM and are in test_chain_complex.py.
 """
 
+from types import SimpleNamespace
+
+import numpy as np
+import openmm as mm
 import pytest
+from openmm import unit
 
 from maws.complex import Complex
 from maws.structure import Structure
@@ -300,3 +308,172 @@ class TestComplexCacheKey:
         key_b = cpx_b._build_cache_key()
 
         assert key_a != key_b
+
+
+class TestPertMinMobileAtoms:
+    """Tests for Complex.pert_min() honouring the rigid part of the complex.
+
+    Regression tests for the receptor-perturbation defect: ``pert_min`` kicked
+    *every* atom in the complex and then minimised *every* atom, including the
+    target protein/ligand that MAWS treats as a rigid docking partner. Because
+    the perturbed coordinates are carried forward through ``best_positions``
+    (run.py), the distortion accumulated across growth steps.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _seeded_rng(self):
+        """``pert_min`` kicks from the global NumPy RNG, which nothing seeds.
+
+        Pin it so a failure here is reproducible rather than a one-off draw.
+        """
+        np.random.seed(20260727)
+
+    @staticmethod
+    def _complex_with_positions(n_atoms):
+        """A Complex carrying positions only, with minimize() stubbed out.
+
+        Isolates the perturbation step so the test does not need LEaP or a
+        real OpenMM System.
+        """
+        cpx = Complex()
+        coords = np.arange(3 * n_atoms, dtype=float).reshape(n_atoms, 3)
+        cpx.positions = [mm.Vec3(*row) for row in coords] * unit.angstrom
+        cpx.minimize = lambda max_iterations=100: None
+        return cpx
+
+    @staticmethod
+    def _as_array(positions):
+        return np.array(
+            [[v.x, v.y, v.z] for v in positions.value_in_unit(unit.angstrom)]
+        )
+
+    def test_pert_min_leaves_immobile_atoms_untouched(self):
+        """Atoms outside ``atoms`` must not be displaced by the kick."""
+        cpx = self._complex_with_positions(10)
+        before = self._as_array(cpx.positions)
+
+        # Atoms 0-2 are the aptamer; 3-9 are the rigid target.
+        cpx.pert_min(size=0.5, iterations=5, atoms=range(0, 3))
+
+        after = self._as_array(cpx.positions)
+        assert np.array_equal(after[3:], before[3:]), "rigid atoms were perturbed"
+        assert not np.array_equal(after[:3], before[:3]), "mobile atoms did not move"
+
+    def test_pert_min_without_atoms_perturbs_everything(self):
+        """``atoms=None`` keeps the documented whole-complex behaviour."""
+        cpx = self._complex_with_positions(10)
+        before = self._as_array(cpx.positions)
+
+        cpx.pert_min(size=0.5, iterations=1)
+
+        after = self._as_array(cpx.positions)
+        assert not np.array_equal(after, before)
+
+    def test_pert_min_freezes_immobile_atoms_during_minimisation(self):
+        """The minimiser must not relax the rigid target either.
+
+        Restricting only the random kick is not enough: ``minimize()`` moves
+        every particle with a non-zero mass, so the target would still drift
+        away from its input coordinates.
+        """
+        n_atoms, n_mobile = 12, 4
+        cpx = Complex()
+        cpx.system = mm.System()
+        force = mm.NonbondedForce()
+        force.setNonbondedMethod(mm.NonbondedForce.NoCutoff)
+        for i in range(n_atoms):
+            cpx.system.addParticle(12.0)
+            force.addParticle(0.3 * (-1) ** i, 0.3, 0.8)
+        cpx.system.addForce(force)
+
+        cpx.integrator = mm.VerletIntegrator(0.001)
+        cpx.topology = None
+        # "Reference" is the only platform OpenMM always ships; the system is
+        # 12 particles, so its speed does not matter.
+        context = mm.Context(
+            cpx.system, cpx.integrator, mm.Platform.getPlatformByName("Reference")
+        )
+        cpx.simulation = SimpleNamespace(
+            context=context,
+            minimizeEnergy=lambda maxIterations=100: mm.LocalEnergyMinimizer.minimize(
+                context, maxIterations=maxIterations
+            ),
+        )
+
+        rng = np.random.default_rng(7)
+        coords = rng.uniform(0, 15.0, (n_atoms, 3))
+        cpx.positions = [mm.Vec3(*row) for row in coords] * unit.angstrom
+        before = self._as_array(cpx.positions)
+
+        cpx.pert_min(size=0.5, iterations=3, atoms=range(n_mobile))
+
+        after = self._as_array(cpx.positions)
+        # Coordinates round-trip Å -> nm -> Å through the OpenMM Context, so
+        # frozen atoms return to within floating-point representation error
+        # (~1e-15 Å) rather than bit-identically. Real motion is ~1 Å.
+        assert np.allclose(after[n_mobile:], before[n_mobile:], rtol=0, atol=1e-9), (
+            "minimiser moved the rigid atoms"
+        )
+        assert not np.allclose(
+            after[:n_mobile], before[:n_mobile], rtol=0, atol=1e-9
+        ), "mobile atoms did not move"
+
+    def test_pert_min_restores_masses(self):
+        """Freezing is local to the call; masses are put back afterwards."""
+        cpx = Complex()
+        cpx.system = mm.System()
+        for _ in range(6):
+            cpx.system.addParticle(12.0)
+        cpx.simulation = None
+        coords = np.zeros((6, 3))
+        cpx.positions = [mm.Vec3(*row) for row in coords] * unit.angstrom
+        cpx.minimize = lambda max_iterations=100: None
+
+        cpx.pert_min(size=0.1, iterations=1, atoms=range(2))
+
+        masses = [
+            cpx.system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(6)
+        ]
+        assert masses == [12.0] * 6
+
+    @pytest.mark.parametrize("bad", [range(-2, 3), range(8, 12), [0, 1, 10]])
+    def test_pert_min_rejects_out_of_range_atoms(self, bad):
+        """Bad indices must fail loudly rather than move the wrong atoms.
+
+        A negative index is the dangerous one: ``positions[-1]`` silently kicks
+        the atom at the far end of the array, while the set difference against
+        ``range(n_atoms)`` leaves that same atom in the immobile group and
+        freezes it. Moved and pinned at once, with nothing raised.
+        """
+        cpx = self._complex_with_positions(10)
+        before = self._as_array(cpx.positions)
+
+        with pytest.raises(IndexError, match=r"global indices in \[0, 10\)"):
+            cpx.pert_min(size=0.5, iterations=1, atoms=bad)
+
+        assert np.array_equal(self._as_array(cpx.positions), before)
+
+    def test_freeze_restores_masses_if_reinitialize_fails(self):
+        """A failed freeze must not leave the target permanently massless.
+
+        ``_freeze_particles`` zeroes the masses *before* it reinitializes the
+        Context. If that reinitialize raises, the saved masses go with the
+        exception, so nothing downstream can put them back.
+        """
+        cpx = Complex()
+        cpx.system = mm.System()
+        for _ in range(6):
+            cpx.system.addParticle(12.0)
+
+        def _boom(preserveState=True):
+            raise RuntimeError("context reinitialize failed")
+
+        cpx.simulation = SimpleNamespace(context=SimpleNamespace(reinitialize=_boom))
+
+        with pytest.raises(RuntimeError, match="context reinitialize failed"):
+            cpx._freeze_particles(range(2, 6))
+
+        masses = [
+            cpx.system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(6)
+        ]
+        assert masses == [12.0] * 6, "masses left zeroed after a failed freeze"

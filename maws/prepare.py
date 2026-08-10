@@ -1,15 +1,17 @@
 """
-Thin, testable wrappers around AmberTools executables for ligand/fragment prep,
-plus a pure-Python hydrogen toggle using OpenMM.
+Thin, testable wrappers around AmberTools executables for ligand/fragment prep.
 
 Functions
 ---------
-makeLib
+make_lib
     Parameterize a molecule (optionally pre-parameterized) and produce
     Amber OFF library (.lib) and frcmod (if needed) using an isolated temp dir.
 
-toggleHydrogens
-    Add or remove hydrogens in-place on a PDB using OpenMM's Modeller.
+Notes
+-----
+Hydrogen handling lives elsewhere: stripping hydrogens is `maws.pdb_cleaner`
+(`--remove-h`), and protonation during parameterization is done by tleap inside
+`make_lib`, so it stays consistent with the sourced leaprc force fields.
 """
 
 from __future__ import annotations
@@ -19,7 +21,6 @@ import tempfile
 from pathlib import Path
 
 from openmm import app
-from openmm.app import ForceField, Modeller, PDBFile
 
 from maws.tools import find_exe, run
 
@@ -205,36 +206,3 @@ def make_lib(
         length = sum(1 for _ in pdb.topology.atoms())
 
     return length
-
-
-def toggle_hydrogens(path: str, add: bool = True, ph: float = 7.0) -> None:
-    """
-    Add or strip hydrogens in-place on a PDB using OpenMM Modeller.
-
-    Parameters
-    ----------
-    path
-        Path to a PDB file to modify in-place.
-    add
-        If True, add hydrogens according to the provided force field and pH.
-        If False, remove all hydrogens.
-    ph
-        Target pH used by `Modeller.addHydrogens()`.
-
-    Notes
-    -----
-    - Uses `amber19-all.xml` and `amber19/tip3pfb.xml` when adding hydrogens.
-      Ensure OpenMM’s forcefield files are installed/available.
-    """
-    pdb = PDBFile(path)
-    modeller = Modeller(pdb.topology, pdb.positions)
-    if add:
-        ff = ForceField("amber19-all.xml", "amber19/tip3pfb.xml")
-        modeller.addHydrogens(ff, pH=ph)
-    else:
-        hydrogens = [
-            a for a in modeller.getTopology().atoms() if a.element.symbol == "H"
-        ]
-        modeller.delete(hydrogens)
-    with open(path, "w") as f:
-        PDBFile.writeFile(modeller.getTopology(), modeller.getPositions(), f)

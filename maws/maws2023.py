@@ -371,7 +371,12 @@ def main():
                         aptamer.prepend_sequence(ntide)
 
                     cx.rebuild()  # cached build + coordinate mapping
-                    cx.pert_min(size=0.5)  # light shake to find nearby minima
+                    # light shake to find nearby minima; the docking target is
+                    # rigid, so only the aptamer chain may move
+                    cx.pert_min(
+                        size=0.5,
+                        atoms=range(aptamer.element[0], aptamer.element[2]),
+                    )
 
                     positions0 = cx.positions[:]
 
