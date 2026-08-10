@@ -4,7 +4,10 @@ Unit tests for maws.complex module.
 These tests verify the Complex class's pure Python functionality:
 - initialization
 - chain management (add_chain, get_chain, aptamer_chain, ligand_chain)
-- No external dependencies (AmberTools/OpenMM not required for these tests)
+- pert_min's rigid-region handling, against a hand-built OpenMM System
+
+OpenMM is required (it is imported directly and via maws.complex), but
+AmberTools/LEaP is not: nothing here builds a real topology from a library.
 
 Note: Tests for build(), rebuild(), add_chain_from_pdb(), and rotation
 operations require AmberTools/OpenMM and are in test_chain_complex.py.
@@ -317,6 +320,14 @@ class TestPertMinMobileAtoms:
     (run.py), the distortion accumulated across growth steps.
     """
 
+    @pytest.fixture(autouse=True)
+    def _seeded_rng(self):
+        """``pert_min`` kicks from the global NumPy RNG, which nothing seeds.
+
+        Pin it so a failure here is reproducible rather than a one-off draw.
+        """
+        np.random.seed(20260727)
+
     @staticmethod
     def _complex_with_positions(n_atoms):
         """A Complex carrying positions only, with minimize() stubbed out.
@@ -377,8 +388,10 @@ class TestPertMinMobileAtoms:
 
         cpx.integrator = mm.VerletIntegrator(0.001)
         cpx.topology = None
+        # "Reference" is the only platform OpenMM always ships; the system is
+        # 12 particles, so its speed does not matter.
         context = mm.Context(
-            cpx.system, cpx.integrator, mm.Platform.getPlatformByName("CPU")
+            cpx.system, cpx.integrator, mm.Platform.getPlatformByName("Reference")
         )
         cpx.simulation = SimpleNamespace(
             context=context,
@@ -422,6 +435,23 @@ class TestPertMinMobileAtoms:
             cpx.system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(6)
         ]
         assert masses == [12.0] * 6
+
+    @pytest.mark.parametrize("bad", [range(-2, 3), range(8, 12), [0, 1, 10]])
+    def test_pert_min_rejects_out_of_range_atoms(self, bad):
+        """Bad indices must fail loudly rather than move the wrong atoms.
+
+        A negative index is the dangerous one: ``positions[-1]`` silently kicks
+        the atom at the far end of the array, while the set difference against
+        ``range(n_atoms)`` leaves that same atom in the immobile group and
+        freezes it. Moved and pinned at once, with nothing raised.
+        """
+        cpx = self._complex_with_positions(10)
+        before = self._as_array(cpx.positions)
+
+        with pytest.raises(IndexError, match=r"global indices in \[0, 10\)"):
+            cpx.pert_min(size=0.5, iterations=1, atoms=bad)
+
+        assert np.array_equal(self._as_array(cpx.positions), before)
 
     def test_freeze_restores_masses_if_reinitialize_fails(self):
         """A failed freeze must not leave the target permanently massless.

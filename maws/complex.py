@@ -1033,6 +1033,11 @@ class Complex:
             duration of the call, which pins them during minimization. ``None``
             lets the **whole** complex move.
 
+        Raises
+        ------
+        IndexError
+            If any entry of ``atoms`` falls outside ``[0, len(self.positions))``.
+
         Notes
         -----
         In a MAWS run the docking target is rigid and only the aptamer chain may
@@ -1042,8 +1047,20 @@ class Complex:
         carried-forward coordinates.
         """
         n_atoms = len(self.positions)
-        mobile = range(n_atoms) if atoms is None else list(atoms)
-        immobile = [] if atoms is None else sorted(set(range(n_atoms)) - set(mobile))
+        if atoms is None:
+            mobile: Sequence[int] = range(n_atoms)
+            immobile: Sequence[int] = []
+        else:
+            mobile = sorted(set(atoms))
+            if mobile and not 0 <= mobile[0] <= mobile[-1] < n_atoms:
+                # A negative index would otherwise kick an atom at the far end
+                # of the array while that same atom stays in ``immobile`` and
+                # is frozen - moved and pinned at once, with no error raised.
+                raise IndexError(
+                    f"atoms must be global indices in [0, {n_atoms}), got "
+                    f"[{mobile[0]}, {mobile[-1]}]"
+                )
+            immobile = sorted(set(range(n_atoms)).difference(mobile))
 
         saved_masses = self._freeze_particles(immobile)
         try:
