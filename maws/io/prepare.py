@@ -21,7 +21,7 @@ from pathlib import Path
 from openmm import app
 from openmm.app import ForceField, Modeller, PDBFile
 
-from maws.tools import find_exe, run
+from maws.io.tools import run_tool
 
 
 def make_lib(
@@ -34,6 +34,7 @@ def make_lib(
     force_field_aptamer: str = "leaprc.RNA.OL3",
     force_field_ligand: str = "leaprc.protein.ff19SB",
     parameterized: bool = False,
+    output_dir: str | Path | None = None,
 ) -> int:
     """
     Generate Amber OFF library (.lib) and (when needed) a .frcmod for a residue.
@@ -94,7 +95,9 @@ def make_lib(
     """
     src = Path(file_path).resolve()
     name, ext = src.stem, src.suffix[1:].lower()
-    out_base = src.parent / residue_name
+    base = Path(output_dir) if output_dir is not None else src.parent
+    base.mkdir(parents=True, exist_ok=True)
+    out_base = base / residue_name
 
     with tempfile.TemporaryDirectory() as td:
         w = Path(td)
@@ -124,9 +127,9 @@ def make_lib(
                 ante_in = str(stripped)
 
             # antechamber: input may be pdb/mol2/sdf...; output is temp/{name}.mol2
-            run(
+            run_tool(
                 [
-                    find_exe("antechamber"),
+                    "antechamber",
                     "-i",
                     ante_in,
                     "-fi",
@@ -146,9 +149,9 @@ def make_lib(
             )
 
             # parmchk2 → temp/{residue_name}.frcmod (-s matches the atom-type set)
-            run(
+            run_tool(
                 [
-                    find_exe("parmchk2"),
+                    "parmchk2",
                     "-i",
                     f"{name}.mol2",
                     "-f",
@@ -193,7 +196,7 @@ def make_lib(
         ]
 
         (w / "leap.in").write_text("\n".join(lines))
-        run([find_exe("tleap"), "-f", "leap.in"], cwd=w)
+        run_tool(["tleap", "-f", "leap.in"], cwd=w)
 
         # Move outputs next to the input
         shutil.move(w / f"{residue_name}.lib", out_base.with_suffix(".lib"))
