@@ -151,34 +151,45 @@ score = entropy_score(energies, beta=0.01)
 ### Proposed
 
 ```python
-from maws import Assembly, ForceField, ResidueLibrary, build, entropy_score
-from maws.sampling import SurfaceSampler
+from itertools import islice
+import numpy as np
 
-ff = ForceField.for_target("RNA", "protein", salt_conc=0.15)   # one value, one place
+from maws import Assembly, ForceField, build, entropy_score, rna
+from maws.sampling import SurfaceSampler, TorsionAngles
+
+rng = np.random.default_rng(0)                       # one seed, whole run repeatable
+ff = ForceField.for_target("RNA", "protein", salt_conc=0.15)
 system = build(
     Assembly()
-    .with_aptamer(ResidueLibrary.rna(), sequence="G")
+    .with_aptamer(rna(), sequence="G")
     .with_ligand("ligand.pdb", ff),
     ff,
 )
 
-sampler = SurfaceSampler.around(system.chain("ligand"), reach=10.0, probe=1.4)
-pose0 = system.pose                                            # a value; never copied
+aptamer  = system.chain("aptamer")
+torsions = aptamer.residue(0).torsions()             # the bonds we may turn
+sampler  = SurfaceSampler.around(system, "ligand", reach=10.0, probe=1.4, rng=rng)
+angles   = TorsionAngles(len(torsions), rng=rng)
+energy   = system.energy_model()
+base     = system.pose                               # a value; never copied
 
-energies = [
-    system.energy(
-        pose0.place(system.chain("aptamer"), sampler.sample())
-            .randomize_torsions(system.chain("aptamer").residue(0))
-    )
-    for _ in range(5000)
-]
+energies = []
+for placement in islice(sampler, 5000):              # the loop reads top to bottom
+    pose = base.place(aptamer, placement)            # put the strand somewhere
+    pose = pose.rotate_all(torsions, angles.sample())  # give it a shape
+    energies.append(energy.evaluate(pose))           # score it
 
 score = entropy_score(energies, beta=0.01)
 ```
 
+The loop is the point. It has the same shape as a PyTorch training loop — iterate a
+source, transform, score, record — and each line is one named call rather than a
+step buried inside a comprehension. `base` never changes, so "start again from the
+beginning" is just using the variable again.
+
 Fewer lines is not the goal. Fewer things to know is. Gone: `deepcopy`, the second
 `Complex`, manual save/restore, force fields typed twice, `* unit.angstrom` at call
-sites, chain-by-index.
+sites, chain-by-index, and the global RNG that made runs unrepeatable.
 
 ---
 

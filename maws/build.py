@@ -80,10 +80,13 @@ least the right order of magnitude.
 """
 
 CHAIN_SEPARATION = 25.0
-"""Distance in ångström between the grids of two chains in a fake structure.
+"""Distance in ångström between the starting corners of two chains' grids.
 
-Far enough apart that the chains do not overlap, near enough that a sampler
-looking for positions around one of them has somewhere to put the other.
+This is the offset between grid origins, not the clearance between the chains:
+each grid has a width of its own, so the nearest pair of atoms across two
+chains sits closer than this. Far enough apart that the chains do not overlap,
+near enough that a sampler looking for positions around one of them has
+somewhere to put the other.
 """
 
 

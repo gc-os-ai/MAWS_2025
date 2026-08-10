@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maws"
-version = "0.1.0.dev0"
+version = "0.2.0.dev0"
 description = "MAWS: residue-based chemistry, complex preparation, and OpenMM routines for aptamer workflows"
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 license = { file = "LICENSE" }
 authors = [
   { name = "German Center for Open Source AI", email = "info@gcos.ai" },
@@ -26,7 +26,6 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -54,6 +53,9 @@ gpu = [
   "openmm-cuda",
 ]
 
+[project.scripts]
+maws = "maws.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/gc-os-ai/MAWS_2025"
 Repository = "https://github.com/gc-os-ai/MAWS_2025"
@@ -67,12 +69,13 @@ include-package-data = true
 include = ["maws*"]
 
 [tool.setuptools.package-data]
-# if you later move data under maws/, switch to:
-# maws = ["data/*.pdb", "data/*.sdf", "data/*.lib", "data/*.frcmod"]
+# Marks the package as carrying type annotations, so type checkers and editors
+# use them instead of treating every import from maws as untyped.
+maws = ["py.typed"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 exclude = ["__pycache__", ".venv", "build", "dist", ".git"]
 
 [tool.ruff.lint]
@@ -85,8 +88,12 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-ra"
+testpaths = ["tests", "maws"]
+# --doctest-modules runs every Examples block in the package as a test, so a
+# docstring that shows output the code no longer produces fails the build.
+# Integration tests need AmberTools and OpenMM, so they are excluded here and
+# run on request with: pytest -m integration
+addopts = "-ra --doctest-modules -m 'not integration'"
 markers = [
   "integration: marks tests as integration tests (require AmberTools/OpenMM)",
   "slow: marks tests as slow running",

@@ -1,5 +1,5 @@
 """
-Tests for maws.pdb_cleaner module.
+Tests for maws.io.pdb_cleaner.
 
 This module tests the PDB parsing and cleaning functions:
 - pdb_structure(): Parse single PDB lines
@@ -8,7 +8,7 @@ This module tests the PDB parsing and cleaning functions:
 """
 
 # Import only the parsing functions that don't require complex dependencies
-from maws.pdb_cleaner import (
+from maws.io.pdb_cleaner import (
     _pad80,
     check_hydrogen,
     pdb_reader,

@@ -772,7 +772,7 @@ class BuiltSystem:
         for chain in assembly.chains:
             if not isinstance(chain, ResidueChain):
                 raise ConfigurationError(
-                    f"chain {chain.role!r} is not parameterised yet, so it "
+                    f"chain {chain.role!r} is not parameterized yet, so it "
                     f"cannot be part of a built system"
                 )
             chains.append(chain)
@@ -913,14 +913,15 @@ class BuiltSystem:
         --------
         maws.energy.StubEnergy : The analytic stand-in used in tests.
         """
-        from maws.energy import OpenMMEnergy
-
         if self._amber is None:
             raise ConfigurationError(
                 "this system has no AMBER topology, so OpenMM cannot score it. "
                 "It was built without LEaP — use maws.energy.StubEnergy, or "
                 "build with maws.build.LeapBuilder."
             )
+
+        from maws.energy import OpenMMEnergy
+
         return OpenMMEnergy.from_prmtop(
             self._amber.prmtop_path, self._forcefield, platform=platform
         )

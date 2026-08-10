@@ -1,104 +1,99 @@
 """
-Pytest configuration for MAWS test suite.
+Shared fixtures for the MAWS test suite.
 
-This file provides shared fixtures and markers for all tests:
-- `integration` marker: Tests requiring OpenMM/AmberTools
-- `slow` marker: Tests that take more than a few seconds
-- Common fixtures for test data paths
+The suite is in three tiers, one directory each:
+
+``tests/unit``
+    Pure functions and value types. Nothing is built, nothing is scored, and
+    no random numbers are drawn. Every assertion can be checked by hand.
+``tests/algorithm``
+    The search, the samplers, the reporters and the command-line program, run
+    end to end against the stand-in builder and the stand-in scorer. No
+    AmberTools, no OpenMM, milliseconds per test.
+``tests/integration``
+    Anything needing AmberTools or OpenMM installed. Marked ``integration``
+    and skipped by default; run them with ``pytest -m integration``.
+
+The fixtures below serve the middle tier. They build a small design out of
+:class:`~maws.build.FakeBuilder` grids, which have the right chains, the right
+atom counts and real turnable bonds, but no chemistry.
 """
 
-import os
+from __future__ import annotations
 
+from pathlib import Path
+
+import numpy as np
 import pytest
 
+from maws.build import FakeBuilder
+from maws.forcefield import ForceField
+from maws.libraries import rna
+from maws.topology import Assembly, BuiltSystem
 
-def pytest_configure(config):
-    """Register custom markers to avoid warnings."""
-    config.addinivalue_line(
-        "markers", "integration: marks tests requiring OpenMM/AmberTools"
-    )
-    config.addinivalue_line("markers", "slow: marks tests as slow-running")
+SMALL_TARGET_ATOMS = 20
+"""Atom count of the stand-in target used throughout the suite.
 
-
-# ---------------------------------------------------------------------------
-# Shared Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def data_dir():
-    """Path to the test data directory."""
-    return os.path.join(os.path.dirname(__file__), "..", "data")
+Large enough that its grid is genuinely three-dimensional, small enough that a
+distance between any two of its atoms can be worked out by hand.
+"""
 
 
 @pytest.fixture
-def sample_pdb_path(data_dir):
-    """Path to the 1BRQ.pdb test file."""
-    pdb_path = os.path.join(data_dir, "1BRQ.pdb")
-    if not os.path.exists(pdb_path):
-        pytest.skip("Test PDB file not found: data/1BRQ.pdb")
-    return pdb_path
+def rng() -> np.random.Generator:
+    """A random generator with a fixed seed, so every test repeats exactly."""
+    return np.random.default_rng(20250810)
 
 
 @pytest.fixture
-def cleaned_pdb_path(data_dir):
-    """Path to the pre-cleaned 1BRQ PDB file."""
-    pdb_path = os.path.join(data_dir, "1BRQ_cleaned.pdb")
-    if not os.path.exists(pdb_path):
-        pytest.skip("Cleaned PDB file not found: data/1BRQ_cleaned.pdb")
-    return pdb_path
-
-
-# ---------------------------------------------------------------------------
-# Synthetic Complex-like fixtures (no OpenMM build) for surface-sampler tests
-# ---------------------------------------------------------------------------
-
-import numpy as np  # noqa: E402
-from openmm import unit  # noqa: E402
-
-
-class _SyntheticAtom:
-    def __init__(self, symbol):
-        self.element = type("E", (), {"symbol": symbol, "mass": 12.0 * unit.dalton})()
-
-
-class _SyntheticTopology:
-    def __init__(self, symbols):
-        self._atoms = [_SyntheticAtom(s) for s in symbols]
-
-    def atoms(self):
-        # Match OpenMM Topology.atoms(), which is a generator method.
-        return iter(self._atoms)
-
-
-class SyntheticComplex:
-    """Duck-typed Complex for surface-sampling tests (no OpenMM build)."""
-
-    def __init__(self, positions_angstrom, symbols):
-        self.positions = np.asarray(positions_angstrom, dtype=float) * unit.angstrom
-        self.topology = _SyntheticTopology(symbols)
+def data_dir() -> Path:
+    """The repository's ``data`` directory, which holds example structures."""
+    return Path(__file__).resolve().parent.parent / "data"
 
 
 @pytest.fixture
-def synthetic_two_carbon_complex():
-    """Two C atoms 10 Å apart along the x-axis."""
-    return SyntheticComplex(
-        positions_angstrom=[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
-        symbols=["C", "C"],
+def sample_pdb_path(data_dir: Path) -> Path:
+    """A real downloaded protein structure, skipping the test if it is absent."""
+    path = data_dir / "1BRQ.pdb"
+    if not path.exists():
+        pytest.skip(f"example structure not found: {path}")
+    return path
+
+
+@pytest.fixture
+def forcefield() -> ForceField:
+    """The usual RNA-against-protein setup."""
+    return ForceField.for_target("RNA", "protein")
+
+
+@pytest.fixture
+def builder() -> FakeBuilder:
+    """A builder that puts atoms on a grid instead of running AmberTools."""
+    return FakeBuilder()
+
+
+@pytest.fixture
+def empty_system(builder: FakeBuilder, forcefield: ForceField) -> BuiltSystem:
+    """A target with no aptamer yet, which is what a search starts from."""
+    return builder.build(
+        Assembly().with_aptamer(rna()).with_ligand_stub(SMALL_TARGET_ATOMS),
+        forcefield,
     )
 
 
 @pytest.fixture
-def synthetic_octahedron_complex():
-    """Six C atoms in a unit-axis octahedron at distance 5 Å from origin."""
-    return SyntheticComplex(
-        positions_angstrom=[
-            [5.0, 0.0, 0.0],
-            [-5.0, 0.0, 0.0],
-            [0.0, 5.0, 0.0],
-            [0.0, -5.0, 0.0],
-            [0.0, 0.0, 5.0],
-            [0.0, 0.0, -5.0],
-        ],
-        symbols=["C"] * 6,
+def one_residue_system(builder: FakeBuilder, forcefield: ForceField) -> BuiltSystem:
+    """A target with a single-guanine strand beside it."""
+    return builder.build(
+        Assembly().with_aptamer(rna(), "G").with_ligand_stub(SMALL_TARGET_ATOMS),
+        forcefield,
+    )
+
+
+@pytest.fixture
+def two_residue_system(builder: FakeBuilder, forcefield: ForceField) -> BuiltSystem:
+    """A target with a two-nucleotide strand beside it."""
+    return builder.build(
+        Assembly().with_aptamer(rna(), "G A").with_ligand_stub(SMALL_TARGET_ATOMS),
+        forcefield,
     )

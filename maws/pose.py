@@ -132,8 +132,10 @@ class Pose:
     Parameters
     ----------
     xyz : array_like
-        Shape ``(N, 3)`` positions in ångström, one row per atom. Copied on the
-        way in, so the array passed here can be reused freely afterwards.
+        Shape ``(N, 3)`` positions in ångström, one row per atom. Always copied,
+        so the array passed here can be changed afterwards without the pose
+        noticing, and a pose built from a slice of a larger array does not
+        change when that array does.
     system : object, optional
         The :class:`~maws.topology.BuiltSystem` these positions belong to.
         Carried so that a pose can be written out or handed on without a second
@@ -165,12 +167,25 @@ class Pose:
     <Pose 4 atoms>
     >>> pose.xyz.flags.writeable
     False
+
+    The array handed in stays writable and separate:
+
+    >>> source = np.zeros((2, 3))
+    >>> pose = Pose(source)
+    >>> source[0, 0] = 99.0
+    >>> pose.xyz[0, 0]
+    0.0
     """
 
     __slots__ = ("_system", "_xyz")
 
     def __init__(self, xyz: Any, system: object | None = None) -> None:
-        array = np.ascontiguousarray(xyz, dtype=np.float64)
+        # copy=True is load-bearing. np.ascontiguousarray would hand back the
+        # caller's own array when it is already contiguous float64; marking
+        # that read-only would break the caller's array, and if what was passed
+        # was a view, its base would stay writable and the pose could change
+        # underneath itself.
+        array = np.array(xyz, dtype=np.float64, order="C", copy=True)
         if array.ndim != 2 or array.shape[1] != 3:
             raise ConfigurationError(
                 f"positions must be shaped (N, 3), one row per atom; "

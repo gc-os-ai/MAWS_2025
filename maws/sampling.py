@@ -883,11 +883,16 @@ def make_sampler(
         If `mode` is not one of the two names, or `reach` or `probe` is
         negative.
     """
+    # Every setting is checked whichever mode was chosen. Checking only the
+    # ones the chosen mode reads would let a typo in an unused argument pass
+    # silently, and the caller would never learn the value was ignored.
     if probe < 0:
         raise ConfigurationError(f"probe must not be negative, got {probe}")
+    if reach < 0:
+        raise ConfigurationError(f"reach must not be negative, got {reach}")
+    if d_max <= 0:
+        raise ConfigurationError(f"d_max must be positive, got {d_max}")
     if mode == "sphere":
-        if reach < 0:
-            raise ConfigurationError(f"reach must not be negative, got {reach}")
         return SurfaceSampler.around(system, role, reach=reach, probe=probe, rng=rng)
     if mode == "surface-following":
         return SurfaceFollowingSampler.around(
