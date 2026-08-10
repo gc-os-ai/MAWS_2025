@@ -422,3 +422,28 @@ class TestPertMinMobileAtoms:
             cpx.system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(6)
         ]
         assert masses == [12.0] * 6
+
+    def test_freeze_restores_masses_if_reinitialize_fails(self):
+        """A failed freeze must not leave the target permanently massless.
+
+        ``_freeze_particles`` zeroes the masses *before* it reinitializes the
+        Context. If that reinitialize raises, the saved masses go with the
+        exception, so nothing downstream can put them back.
+        """
+        cpx = Complex()
+        cpx.system = mm.System()
+        for _ in range(6):
+            cpx.system.addParticle(12.0)
+
+        def _boom(preserveState=True):
+            raise RuntimeError("context reinitialize failed")
+
+        cpx.simulation = SimpleNamespace(context=SimpleNamespace(reinitialize=_boom))
+
+        with pytest.raises(RuntimeError, match="context reinitialize failed"):
+            cpx._freeze_particles(range(2, 6))
+
+        masses = [
+            cpx.system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(6)
+        ]
+        assert masses == [12.0] * 6, "masses left zeroed after a failed freeze"

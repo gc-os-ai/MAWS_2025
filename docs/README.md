@@ -227,7 +227,7 @@ flowchart TB
 | `minimize(max_iterations)`            | Energy minimization                             |
 | `step(n)`                             | Run MD for n steps                              |
 | `rigid_minimize()`                    | Experimental torsion search                     |
-| `pert_min(size, iterations)`          | Kick-and-minimize heuristic                     |
+| `pert_min(size, iterations, atoms)`   | Kick-and-minimize; rigid outside `atoms`        |
 
 ---
 

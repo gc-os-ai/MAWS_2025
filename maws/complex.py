@@ -971,15 +971,28 @@ class Complex:
         -------
         dict[int, openmm.unit.Quantity]
             The original masses, for :meth:`_restore_particle_masses`.
+
+        Notes
+        -----
+        Either every index is frozen and the caller receives the masses needed
+        to undo it, or the System is left exactly as it was found. There is no
+        outcome in which particles stay massless with no record of their
+        original masses.
         """
         if not indices or self.system is None:
             return {}
 
         saved = {i: self.system.getParticleMass(i) for i in indices}
-        for i in indices:
-            self.system.setParticleMass(i, 0.0)
-        if self.simulation is not None:
-            self.simulation.context.reinitialize(preserveState=True)
+        try:
+            for i in indices:
+                self.system.setParticleMass(i, 0.0)
+            if self.simulation is not None:
+                self.simulation.context.reinitialize(preserveState=True)
+        except BaseException:
+            # The saved masses are lost with the propagating exception, so the
+            # caller could not undo a partial freeze even if it wanted to.
+            self._restore_particle_masses(saved)
+            raise
         return saved
 
     def _restore_particle_masses(self, saved: dict[int, Quantity]) -> None:
