@@ -208,7 +208,7 @@ class TestChoosing:
                 for e in events
                 if isinstance(e, StepCompleted) and e.step == step
             )
-            assert winner.entropy == min(c.entropy for c in scored)
+            assert winner.score == min(c.score for c in scored)
 
     def test_the_winner_is_one_of_the_candidates_that_was_scored(
         self, empty_system, builder
@@ -255,7 +255,7 @@ class TestRepeatability:
         """Repeatability covers the numbers, not only the answer."""
         first = run_search(empty_system, builder, rng=np.random.default_rng(7))
         second = run_search(empty_system, builder, rng=np.random.default_rng(7))
-        assert first[-1].winner.entropy == second[-1].winner.entropy
+        assert first[-1].winner.score == second[-1].winner.score
 
     def test_different_seeds_explore_differently(self, empty_system, builder):
         """Without a fixed seed the search is genuinely random."""
@@ -428,10 +428,10 @@ class TestCandidateValue:
             sequence=system.chain("aptamer").sequence,
             token="G",
             direction="3prime",
-            entropy=-0.1,
+            score=-0.1,
             energy=-10.0,
             system=system,
             pose=system.pose,
         )
         with pytest.raises(AttributeError):
-            candidate.entropy = 0.0
+            candidate.score = 0.0

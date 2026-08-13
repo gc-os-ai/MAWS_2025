@@ -125,7 +125,7 @@ class ProgressReporter:
             case SearchFinished(winner=winner, steps=steps):
                 print(
                     f"Done after {steps} steps: {winner.sequence} "
-                    f"(E={winner.energy:.2f} kJ/mol, S={winner.entropy:.6f})",
+                    f"(E={winner.energy:.2f} kJ/mol, score={winner.score:.2f})",
                     file=self._stream,
                 )
 
@@ -268,12 +268,12 @@ class LogReporter:
                     "  %s %s -> score=%.6f energy=%.2f",
                     candidate.token,
                     candidate.direction,
-                    candidate.entropy,
+                    candidate.score,
                     candidate.energy,
                 )
                 self._scores.write(
                     f"SEQUENCE: {candidate.sequence}  "
-                    f"SCORE: {candidate.entropy}  "
+                    f"SCORE: {candidate.score}  "
                     f"ENERGY: {candidate.energy}\n"
                 )
             case StepCompleted(step=step, winner=winner):
@@ -382,7 +382,7 @@ def _as_dict(event: StepEvent) -> dict[str, Any]:
                 "sequence": str(candidate.sequence),
                 "token": candidate.token,
                 "direction": candidate.direction,
-                "score": candidate.entropy,
+                "score": candidate.score,
                 "energy": candidate.energy,
             }
         case StepCompleted(step=step, winner=winner):
@@ -390,7 +390,7 @@ def _as_dict(event: StepEvent) -> dict[str, Any]:
                 "event": "StepCompleted",
                 "step": step,
                 "sequence": str(winner.sequence),
-                "score": winner.entropy,
+                "score": winner.score,
                 "energy": winner.energy,
             }
         case SearchFinished(winner=winner, steps=steps):
@@ -398,7 +398,7 @@ def _as_dict(event: StepEvent) -> dict[str, Any]:
                 "event": "SearchFinished",
                 "steps": steps,
                 "sequence": str(winner.sequence),
-                "score": winner.entropy,
+                "score": winner.score,
                 "energy": winner.energy,
             }
     return {"event": type(event).__name__}

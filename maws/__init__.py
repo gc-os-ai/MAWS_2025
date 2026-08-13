@@ -90,7 +90,7 @@ from maws.forcefield import ForceField
 from maws.libraries import dna, rna
 from maws.pose import ChainView, Pose, ResidueView
 from maws.sampling import Placement, Sampler, SurfaceSampler, TorsionAngles
-from maws.scoring import entropy_score
+from maws.scoring import entropy_score, free_energy_score
 from maws.search import (
     Candidate,
     CandidateScored,
@@ -150,6 +150,7 @@ __all__ = [
     "Relaxed",
     "StubEnergy",
     "entropy_score",
+    "free_energy_score",
     # proposing positions and shapes
     "Placement",
     "Sampler",

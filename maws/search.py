@@ -11,7 +11,7 @@ for:
 1. propose every way of extending the strand by one nucleotide — each of the
    four nucleotides, at either end, so eight candidates;
 2. for each candidate, try thousands of shapes and score how promising it looks
-   with :func:`~maws.scoring.entropy_score`;
+   with :func:`~maws.scoring.free_energy_score`;
 3. keep the best candidate and throw the rest away.
 
 The first step is different, because there is nothing to extend yet. Instead
@@ -67,7 +67,7 @@ from maws.pose import ChainView, Pose
 from maws.regrow import grow_chain
 from maws.relax import perturb_and_minimize
 from maws.sampling import Sampler, SurfaceSampler, TorsionAngles
-from maws.scoring import Scorer, entropy_score
+from maws.scoring import Scorer, free_energy_score
 from maws.topology import BuiltSystem
 from maws.values import Direction, NucleotideSequence, Torsion
 
@@ -184,9 +184,10 @@ class Candidate:
         The nucleotide that was added, as written.
     direction : {"3prime", "5prime"}
         Which end it was added at.
-    entropy : float
-        The score. Lower means more promising. See
-        :func:`maws.scoring.entropy_score`.
+    score : float
+        How promising this candidate is, lower being better. What the number
+        means depends on which scorer produced it; with the default it is a
+        free energy in kJ/mol. See :func:`maws.scoring.free_energy_score`.
     energy : float
         The lowest energy found among the shapes tried, in kJ/mol.
     system : maws.topology.BuiltSystem
@@ -198,7 +199,7 @@ class Candidate:
     sequence: NucleotideSequence
     token: str
     direction: Direction
-    entropy: float
+    score: float
     energy: float
     system: BuiltSystem
     pose: Pose
@@ -300,7 +301,7 @@ def grow_aptamer(
     first_samples: int = 5000,
     samples: int = 5000,
     beta: float = 0.01,
-    scorer: Scorer = entropy_score,
+    scorer: Scorer = free_energy_score,
     n_torsions: int = DEFAULT_TORSIONS,
     relax_iterations: int = 0,
     relax_size: float = 0.5,
@@ -345,7 +346,7 @@ def grow_aptamer(
         ``8 * samples * n_nucleotides`` energy evaluations.
     beta : float, default=0.01
         How sharply lower energies are favoured, in mol/kJ.
-    scorer : maws.scoring.Scorer, default=entropy_score
+    scorer : maws.scoring.Scorer, default=free_energy_score
         Reduces a candidate's energies to one number, lower being better.
     n_torsions : int, default=4
         How many of the new residue's turnable bonds to vary.
@@ -391,7 +392,7 @@ def grow_aptamer(
     makes possible without any support from the search itself:
 
     >>> for event in grow_aptamer(base, ...):  # doctest: +SKIP
-    ...     if isinstance(event, StepCompleted) and event.winner.entropy < -0.5:
+    ...     if isinstance(event, StepCompleted) and event.winner.score < -0.5:
     ...         break
     """
     if n_nucleotides < 1:
@@ -486,7 +487,7 @@ def _best_of(candidates: Sequence[Candidate]) -> Candidate:
         raise ConfigurationError(
             "no candidates were scored this step; the alphabet is empty"
         )
-    return min(candidates, key=lambda candidate: candidate.entropy)
+    return min(candidates, key=lambda candidate: candidate.score)
 
 
 def _seed_candidate(
@@ -562,7 +563,7 @@ def _seed_candidate(
         sequence=chain.sequence,
         token=token,
         direction="3prime",
-        entropy=scorer(energies, beta=beta),
+        score=scorer(energies, beta=beta),
         energy=best_energy,
         system=grown.system,
         pose=best_pose,
@@ -662,7 +663,7 @@ def _grow_candidate(
         sequence=chain.sequence,
         token=token,
         direction=direction,
-        entropy=scorer(energies, beta=beta),
+        score=scorer(energies, beta=beta),
         energy=best_energy,
         system=grown.system,
         pose=best_pose,

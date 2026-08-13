@@ -268,9 +268,9 @@ class AptamerDesigner(_BaseEstimator):
     energies_ : numpy.ndarray
         Shape ``(n_targets,)``. Best energy found for each, in kJ/mol. Energies
         for different targets are not comparable with each other.
-    entropies_ : numpy.ndarray
-        Shape ``(n_targets,)``. The score that chose each strand, dimensionless
-        and lower-is-better.
+    scores_ : numpy.ndarray
+        Shape ``(n_targets,)``. The number that chose each strand, lower being
+        better. With the default scorer it is a free energy in kJ/mol.
     results_ : list of maws.api.MawsResult
         The full result for each target, including its final structure and
         whether the run reached the requested length.
@@ -418,7 +418,7 @@ class AptamerDesigner(_BaseEstimator):
         self.results_ = results
         self.sequences_ = [result.sequence for result in results]
         self.energies_ = np.array([result.energy for result in results])
-        self.entropies_ = np.array([result.entropy for result in results])
+        self.scores_ = np.array([result.score for result in results])
         self.n_steps_ = self.n_nucleotides
         return self
 
@@ -470,10 +470,9 @@ class AptamerDesigner(_BaseEstimator):
         Returns
         -------
         float
-            Mean of the negated design scores across every target,
-            dimensionless. Negated because a design score is
-            lower-is-better, while a ``score`` method is expected to be
-            higher-is-better everywhere.
+            Mean of the negated design scores across every target. Negated
+            because a design score is lower-is-better, while a ``score``
+            method is expected to be higher-is-better everywhere.
 
         Raises
         ------
@@ -484,19 +483,19 @@ class AptamerDesigner(_BaseEstimator):
         Examples
         --------
         Standing in for the attribute :meth:`fit` would have filled in, two
-        targets scoring -0.5 and -0.25 average to 0.375 the other way up:
+        targets scoring -800 and -400 average to 600 the other way up:
 
         >>> import numpy as np
         >>> designer = AptamerDesigner()
-        >>> designer.entropies_ = np.array([-0.5, -0.25])
+        >>> designer.scores_ = np.array([-800.0, -400.0])
         >>> designer.score()
-        0.375
+        600.0
         """
-        if not hasattr(self, "entropies_"):
+        if not hasattr(self, "scores_"):
             raise ConfigurationError(
                 "this designer has not been fitted yet; call fit first"
             )
-        return float(-np.mean(self.entropies_))
+        return float(-np.mean(self.scores_))
 
     def _check_params(self) -> None:
         """Check the settings, at the point they are about to be used.

@@ -622,7 +622,7 @@ def _run_design(args: argparse.Namespace) -> int:
                 {
                     "sequence": result.sequence,
                     "energy": result.energy,
-                    "entropy": result.entropy,
+                    "score": result.score,
                     "steps": result.steps,
                     "success": result.success,
                 }

@@ -60,14 +60,14 @@ class TestMawsResult:
 
     def test_length_counts_the_nucleotides_in_the_strand(self):
         """A strand is written with spaces between its nucleotides."""
-        assert MawsResult("G A U", -1421.9, -0.072, steps=3).length == 3
+        assert MawsResult("G A U", -1421.9, -1215.4, steps=3).length == 3
 
     def test_printing_a_result_shows_the_strand_and_both_numbers(self):
         """One line carries everything needed to compare two runs."""
-        text = str(MawsResult("G A U", -1421.9, -0.072, steps=3))
+        text = str(MawsResult("G A U", -1421.9, -1215.4, steps=3))
         assert "G A U" in text
         assert "-1421.90" in text
-        assert "-0.072000" in text
+        assert "-1215.40" in text
 
     def test_a_finished_run_is_marked_successful(self):
         """Success is the default, so only failures have to say so."""
@@ -92,7 +92,7 @@ class TestCollect:
         """Both numbers describe the winning strand, not different ones."""
         result = collect(iter(events))
         assert result.energy == events[-1].winner.energy
-        assert result.entropy == events[-1].winner.entropy
+        assert result.score == events[-1].winner.score
 
     def test_the_final_structure_is_kept(self, events):
         """The result carries enough to write the strand out afterwards."""

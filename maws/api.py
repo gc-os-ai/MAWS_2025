@@ -42,7 +42,7 @@ from maws.forcefield import AptamerType, ForceField, MoleculeType
 from maws.io.pdb_cleaner import resolve_pdb_path
 from maws.libraries import dna, rna
 from maws.sampling import make_sampler
-from maws.scoring import Scorer, entropy_score
+from maws.scoring import Scorer, free_energy_score
 from maws.search import (
     SearchFinished,
     StepEvent,
@@ -79,9 +79,11 @@ class MawsResult:
         Potential energy of the best arrangement found, in kJ/mol. Comparable
         between runs against the same target only; the number includes the
         target's own internal energy, which differs from target to target.
-    entropy : float
-        The score that chose this strand, as produced by
-        :func:`maws.scoring.entropy_score`. Dimensionless, and lower is better.
+    score : float
+        The number that chose this strand, lower being better. With the
+        default scorer it is a free energy in kJ/mol, covering all the shapes
+        tried rather than only the best one. See
+        :func:`maws.scoring.free_energy_score`.
     steps : int
         How many nucleotides were added. Equal to the requested length after a
         run that finished.
@@ -116,18 +118,18 @@ class MawsResult:
 
     Examples
     --------
-    >>> result = MawsResult("G A U", -1421.9, -0.072, steps=3)
+    >>> result = MawsResult("G A U", -1421.9, -1215.4, steps=3)
     >>> result.length
     3
     >>> print(result)
-    G A U  (3 nt, E=-1421.90 kJ/mol, S=-0.072000)
+    G A U  (3 nt, E=-1421.90 kJ/mol, score=-1215.40)
 
     A run that stopped early says so, and its sequence is short:
 
     >>> stopped = MawsResult(
     ...     "G A",
     ...     -900.0,
-    ...     -0.01,
+    ...     -780.0,
     ...     steps=2,
     ...     success=False,
     ...     message="the search stopped before it finished",
@@ -138,7 +140,7 @@ class MawsResult:
 
     sequence: str
     energy: float
-    entropy: float
+    score: float
     steps: int
     success: bool = True
     message: str = ""
@@ -153,7 +155,7 @@ class MawsResult:
     def __str__(self) -> str:
         return (
             f"{self.sequence}  ({self.length} nt, "
-            f"E={self.energy:.2f} kJ/mol, S={self.entropy:.6f})"
+            f"E={self.energy:.2f} kJ/mol, score={self.score:.2f})"
         )
 
 
@@ -173,7 +175,7 @@ def design(
     sampling: SamplingMode = "sphere",
     relax_iterations: int = 50,
     seed: int | None = None,
-    scorer: Scorer = entropy_score,
+    scorer: Scorer = free_energy_score,
     builder: Builder | None = None,
     clean_pdb: bool = False,
     keep_chains: str = "all",
@@ -257,7 +259,7 @@ def design(
     seed : int, optional
         Fixes the randomness, so the same call gives the same answer. Left out,
         every run differs.
-    scorer : maws.scoring.Scorer, default=entropy_score
+    scorer : maws.scoring.Scorer, default=free_energy_score
         Reduces one candidate's energies to the single number the candidates
         are ranked by, lower being better. Replace it to rank by something
         other than how tightly the energies cluster.
@@ -451,7 +453,7 @@ def collect(
         return MawsResult(
             sequence="",
             energy=float("nan"),
-            entropy=float("nan"),
+            score=float("nan"),
             steps=0,
             success=False,
             message="the search stopped before it finished",
@@ -461,7 +463,7 @@ def collect(
     return MawsResult(
         sequence=str(winner.sequence),
         energy=winner.energy,
-        entropy=winner.entropy,
+        score=winner.score,
         steps=finished.steps,
         system=winner.system,
         pose=winner.pose,
