@@ -240,6 +240,13 @@ def perturb_and_minimize(
     return result
 ```
 
+> **Built as:** it takes a `moving` argument as well, naming which atoms may be
+> nudged. Kicking every atom kicks the target too, and the target is not
+> something being fitted — it is what the fits are judged against, so shaking
+> it moves the goalposts differently for every candidate. For the same reason
+> `OpenMMEnergy` takes atoms to freeze during minimisation. See
+> [09-audit-response.md](09-audit-response.md).
+
 The `rng` argument is new and deliberate. Today the code calls `np.random.*` on
 global state ([complex.py:946-948](../../maws/complex.py#L946-L948),
 [space.py:109](../../maws/space.py#L109),

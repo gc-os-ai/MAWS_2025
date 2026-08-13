@@ -1,5 +1,13 @@
 # 07 — Migration Plan
 
+> **Built as:** not this. The plan was ten steps keeping the old path reachable
+> at each one; what happened was a single rewrite with the old path deleted,
+> on a branch, after the instruction that compatibility did not matter. The
+> page is kept because the ordering argument is still the right one for anyone
+> doing this incrementally, and because the tier table below is exactly what
+> was built. What did not survive: every mention of a shim, and the rollback
+> section — there is no old path to fall back to.
+
 **Start with step 1.** It is 2 hours and does not depend on anything else.
 
 **Rule for every step:** one PR, `main` stays green, no step needs a later one to
@@ -329,9 +337,16 @@ The suite has 13 files. Most cannot run without AmberTools. Invert that.
 
 | Tier | Needs | Speed | Covers after migration |
 | --- | --- | --- | --- |
-| unit | nothing | ms | values, sequences, offsets, pose math, entropy, config merge |
+| unit | nothing | ms | values, sequences, offsets, pose math, scoring, config merge |
 | algorithm | `StubEnergy` + `FakeBuilder` | seconds | growth loop, selection, events, CLI wiring |
-| integration | AmberTools + OpenMM | minutes | LEaP build, cache, real energies, end to end |
+| integration | AmberTools + OpenMM | seconds | LEaP build, cache, real energies, bond-length invariants |
+
+> **Built as:** 658 tests in the first two tiers, running in about two seconds
+> with nothing installed, and 32 in the third. The integration tier turned out
+> to matter more than this table suggests: it is the only place where "turning
+> a bond leaves every other bond intact" can be checked, and that check found
+> three defects nothing else could have. See
+> [09-audit-response.md](09-audit-response.md).
 
 Keep the `integration` marker in [`pyproject.toml`](../../pyproject.toml). The
 middle tier is the point. Nothing between "pure function" and "full toolchain"
@@ -364,10 +379,10 @@ one release:
 $ pip install -e .
 $ maws design --target data/pfoa.pdb --length 20 --aptamer DNA --seed 42 -o runs/
 Step 1/20: seeding
-  G 3prime -> entropy=-0.072433 energy=-1421.88
+  G 3prime -> score=-1215.40 energy=-1421.88
   ...
 Step 20/20 complete. Best: G A T C G A T C ...
-Done after 20 steps (E=-1523.71, S=-0.084216)
+Done after 20 steps (E=-1523.71, score=-1301.55)
 Wrote runs/MAWS_aptamer_RESULT.pdb
 
 $ pytest -m "not integration"          # the algorithm, no AmberTools

@@ -106,6 +106,14 @@ class SearchFinished(StepEvent):
     steps: int
 ```
 
+> **Built as:** `nucleotide` is called `token`, since it is the nucleotide as
+> written rather than a name the package chose. `entropy` is called `score`,
+> because the number is no longer an entropy — see
+> [09-audit-response.md](09-audit-response.md) — and its unit depends on which
+> scorer produced it. A `Candidate` also carries the `BuiltSystem` it was
+> scored on, because each candidate is a different structure and its positions
+> mean nothing without it.
+
 The algorithm, written once:
 
 ```python
@@ -120,7 +128,7 @@ def grow_aptamer(
     first_chunk: int = 5000,
     chunk: int = 5000,
     beta: float = 0.01,
-    scorer: Scorer = entropy_score,
+    scorer: Scorer = free_energy_score,
     rng: np.random.Generator | None = None,
 ) -> Iterator[StepEvent]:
     """Grow an aptamer one nucleotide at a time, yielding events as it goes.
@@ -228,8 +236,17 @@ class Scorer(Protocol):
         """Lower is better."""
 ```
 
-`entropy_score` satisfies this with no change. The folding-ΔG filter then composes
-instead of forking the search:
+`entropy_score` satisfies this with no change.
+
+> **Built as:** making the scorer swappable turned out to matter more than this
+> page expected. `entropy_score` is no longer the default: it measures how
+> *concentrated* the energies are and ignores how low they get, which means a
+> candidate that clashes in 998 shapes out of 1000 beats one whose 1000 shapes
+> are all reasonable. `free_energy_score` is the default instead. Both satisfy
+> the protocol, and `entropy_score` is kept for comparing against published
+> runs. See [09-audit-response.md](09-audit-response.md).
+
+The folding-ΔG filter then composes instead of forking the search:
 
 ```python
 def with_folding_penalty(base: Scorer, weight: float, fold: FoldingModel) -> Scorer:
@@ -343,7 +360,7 @@ Same for JSONL output, which is what makes `maws design --format jsonl` in
 The science does not change:
 
 - `entropy_score`, including the `logsumexp` log-space evaluation.
-- The growth strategy: try all 4 nucleotides on both ends, keep lowest entropy.
+- The growth strategy: try all 4 nucleotides on both ends, keep the lowest score.
 - `first_chunk_size` vs `second_chunk_size`. Step 1 samples placement and
   orientation. Later steps sample only torsions.
 - The torsion pattern in later steps: 3 forward torsions on the new residue plus

@@ -1,47 +1,97 @@
-Repository for refactoring the "MAWS 2023" repository by `dtu-denmark` for integration in the [pyaptamer](https://github.com/gc-os-ai/pyaptamer/) package
+# MAWS
 
-### Refactoring aims
+Design an aptamer — a short strand of RNA or DNA — that folds up against a
+target molecule and sticks to it.
 
-* remove or replace binary dependencies
-* remove or replace subprocess calls
-* full python bindings
+MAWS grows the strand one nucleotide at a time. At each step it tries every
+nucleotide at both ends of the strand it has so far, samples thousands of
+shapes for each of those candidates, scores them, and keeps the best. This is
+a rewrite of the [MAWS 2023](README_orig.md) code by `dtu-denmark`, for
+integration into [pyaptamer](https://github.com/gc-os-ai/pyaptamer/).
 
-### Sampling region
+> **This is the experimental redesign branch.** It is not compatible with what
+> came before: the old `Complex`, `Chain`, `Structure`, `space` and `run`
+> modules are gone, and so is the code that imported them. See
+> [docs/redesign](docs/redesign/) for the design and
+> [docs/redesign/09-audit-response.md](docs/redesign/09-audit-response.md) for
+> the scientific defects it fixes and how the answers it gives now differ.
 
-MAWS samples the initial nucleotide pose around the ligand surface using
-SAS-style rejection: candidate poses inside the protein bulk (within
-`vdW + probe`, default `1.4 Å` water-equivalent) are skipped before the
-energy evaluator sees them. The envelope is a single sphere auto-sized
-from the ligand geometry (`radius = R_max + reach`) around its
-mass-weighted centre of mass. Two CLI flags control behavior:
+## Installing
 
-* `--reach FLOAT` — how far the envelope extends past the ligand's
-  bounding radius, in Å (default `10.0`).
-* `--probe FLOAT` — vdW probe radius for the SAS rejection, in Å
-  (default `1.4`, water-equivalent).
+AmberTools is not on PyPI, so a working installation comes from conda:
 
-The same options are available as keyword arguments on
-`maws.run.MawsRunner` for programmatic use. An opt-in surface-following
-sampling mode (`maws.space.make_sampler(..., mode="surface-following",
-d_max=...)`) is also implemented for users who want accepted poses
-concentrated near the molecular surface; see [docs/space.md](docs/space.md)
-for the full API.
+```console
+$ conda env create -f environment.yml
+$ conda activate maws
+$ pip install -e ".[dev]"
+```
 
-### Implicit-solvent salt screening
+Without AmberTools and OpenMM the package still imports, and everything except
+building real structures and computing real energies still runs — which is
+what lets most of the test suite run anywhere.
 
-Energies are evaluated with the GB-OBC1 implicit solvent. The monovalent
-salt concentration used for Debye–Hückel screening is configurable:
+## Running
 
-* `--salt-conc FLOAT` — monovalent salt concentration in mol/L (default
-  `0.15`, ~physiological). Also available as the `salt_conc` keyword on
-  `maws.run.MawsRunner` and `maws.complex.Complex`.
+```console
+$ maws design --target thrombin.pdb --length 15
+```
 
-> **Behavior change:** earlier releases ran unscreened (effectively
-> `0.0` mol/L). Because screening changes the GB energies that drive
-> sequence selection, results will differ from prior versions unless you
-> pass `--salt-conc 0`. The screening is monovalent only and does not
-> model divalent ions such as Mg²⁺.
+Try a short run first. The defaults perform on the order of a million energy
+evaluations and take hours:
 
-### original readme
+```console
+$ maws design --target thrombin.pdb --length 3 --samples 50
+```
 
-https://github.com/gc-os-ai/MAWS_2025/blob/main/README_orig.md
+The same thing from Python:
+
+```python
+from maws import design
+
+result = design("thrombin.pdb", length=15)
+print(result.sequence, result.energy, result.score)
+```
+
+`maws design --help` lists every option; each has a matching keyword argument
+on `design`.
+
+## How it is put together
+
+Each layer uses only the ones above it.
+
+| Layer | Modules | What lives there |
+|---|---|---|
+| values | `values`, `errors`, `forcefield` | Sequences, atom ranges, turnable bonds. No behaviour, no I/O. |
+| structures | `topology`, `build`, `libraries`, `io` | What a design is made of, and running AmberTools to build it. |
+| geometry | `pose`, `geometry`, `regrow` | Atom positions, and every way of moving them. |
+| physics | `energy`, `relax` | Turning positions into an energy, and settling them. |
+| search | `sampling`, `scoring`, `search` | Proposing shapes, scoring them, and the growth loop. |
+| interface | `api`, `cli`, `reporting` | `design()`, `AptamerDesigner`, the command-line program. |
+
+A `Pose` never changes: every method returns a new one. That is what makes the
+search safe to write as a plain loop over candidates.
+
+## Testing
+
+```console
+$ pytest                  # unit and algorithm tiers, about two seconds
+$ pytest -m integration   # needs AmberTools and OpenMM installed
+```
+
+The suite is in three tiers, described at the top of
+[tests/conftest.py](tests/conftest.py). The middle tier runs the real search
+algorithm against a stand-in builder and a stand-in energy, so the whole growth
+loop is exercised in milliseconds with nothing installed. The integration tier
+is where anything that depends on real chemistry is checked — above all that
+turning any bond of a real strand leaves every other bond intact.
+
+Docstring examples are run as tests too, so an example that no longer produces
+what it claims fails the build.
+
+## Contributing
+
+Docstrings follow the rules in
+[.claude/skills/docstring/SKILL.md](.claude/skills/docstring/SKILL.md): NumPy
+format, written for someone meeting the package for the first time.
+
+`pre-commit install` sets up the formatter and linter that run on every commit.

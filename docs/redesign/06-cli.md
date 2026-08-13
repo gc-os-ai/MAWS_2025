@@ -111,7 +111,7 @@ design:
 sampling:
   --samples N           Samples per growth step  [5000]
   --first-samples N     Samples in step 1  [same as --samples]
-  --beta FLOAT          Inverse temperature for the entropy score  [0.01]
+  --beta FLOAT          How sharply low energies are favoured  [0.01]
   --reach A             How far the envelope extends past the target, Å  [10.0]
   --probe A             vdW probe radius for SAS rejection, Å  [1.4]
   --sampling MODE       sphere | surface-following  [sphere]
@@ -274,7 +274,7 @@ class AptamerDesigner(BaseEstimator):
     n_samples : int, default=5000
         Conformations sampled per growth step.
     beta : float, default=0.01
-        Inverse temperature for the entropy score.
+        How sharply lower energies are favoured, in mol/kJ.
     energy : EnergyModel or None, default=None
         Energy model. If None, an OpenMM GB model is built in `fit`.
     random_state : int, RandomState instance or None, default=None
@@ -363,9 +363,9 @@ class AptamerDesigner(BaseEstimator):
         return self.fit(X, y).sequences_
 
     def score(self, X, y=None):
-        """Mean negative entropy of the designs. Higher is better."""
+        """Mean negated design score. Higher is better."""
         check_is_fitted(self)
-        return float(-np.mean(self.entropies_))
+        return float(-np.mean(self.scores_))
 
     def __sklearn_tags__(self):
         tags = super().__sklearn_tags__()
@@ -412,7 +412,7 @@ callers who want the estimator API use the class.
 ```python
 for event in grow_aptamer(system, energy=energy, sampler=sampler,
                           n_nucleotides=20, alphabet=ff.alphabet):
-    if isinstance(event, StepCompleted) and event.winner.entropy > -0.01:
+    if isinstance(event, StepCompleted) and event.winner.score > -500.0:
         break                             # early stop, not possible today
 ```
 
@@ -467,10 +467,15 @@ numeric array. Skip those explicitly by name and say why, rather than dropping t
 suite. What it does buy you: `clone()` correctness, `get_params` round-tripping,
 and the "no work in `__init__`" rule, all enforced automatically.
 
-**Adds one dependency: `scikit-learn`.** Per your `feedback_dual_dep_paths` note,
-it goes in both `environment.yml` and `pyproject.toml`.
+~~**Adds one dependency: `scikit-learn`.**~~ Per your `feedback_dual_dep_paths`
+note, it would go in both `environment.yml` and `pyproject.toml`.
 
-`MawsResult` carries `.sequence`, `.energy`, `.entropy`, `.success`, and
+> **Built as:** no new dependency. The estimator contract is a handful of
+> method names and attribute conventions, all of which `AptamerDesigner`
+> implements directly, so scikit-learn is needed to *use* one of these inside a
+> scikit-learn pipeline but not to have one.
+
+`MawsResult` carries `.sequence`, `.energy`, `.score`, `.success`, and
 `.message`, following `scipy.optimize.OptimizeResult`. Today's `MawsResult`
 ([run.py:23-43](../../maws/run.py#L23-L43)) has no `success` flag, so a run that
 found nothing usable is indistinguishable from one that worked.

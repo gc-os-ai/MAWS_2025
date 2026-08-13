@@ -162,6 +162,15 @@ for _ in range(chunk_size):
         best = Candidate(energy=e, pose=pose)   # keeping it is a reference, not a copy
 ```
 
+> **Built as:** two things about that loop changed. `place` centres the chain
+> on the proposed position rather than putting its first atom there, because
+> the first-atom reading left the chain up to 3.2 Å from where it was asked to
+> go. And the loop over `torsion(j)` became `rotate_all(residue.torsions(),
+> angles)`, where `torsions()` leaves out any bond whose turn moves nothing —
+> which is why the number of angles drawn now comes from the number of bonds
+> that came back rather than from a setting. See
+> [09-audit-response.md](09-audit-response.md).
+
 The copies left are the ones actually needed: one array copy per `rotate`. Those
 are contiguous `memcpy` on a float64 buffer, not per-object Python allocation.
 `copy.deepcopy` leaves the search path entirely. `Assembly` is frozen and

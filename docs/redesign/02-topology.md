@@ -393,15 +393,25 @@ maws/
   build.py         # Layer 1 — Builder protocol, LeapBuilder, build()
   io/
     prepare.py     # moved from maws/prepare.py, same behaviour
-    pdb_cleaner.py # moved from maws/pdb_cleaner.py, UNCHANGED
+    pdb_cleaner.py # rewritten; see 09-audit-response.md
     tools.py       # moved from maws/tools.py, same behaviour
   libraries/
     rna.py         # was rna_structure.py — tables only
     dna.py         # was dna_structure.py — tables only
 ```
 
-[`pdb_cleaner.py`](../../maws/pdb_cleaner.py) (655 lines) is not touched. It is
-already a clean function with its own tests. It only moves.
+~~[`pdb_cleaner.py`](../../maws/io/pdb_cleaner.py) (655 lines) is not touched.
+It is already a clean function with its own tests. It only moves.~~
+
+> **Built as:** rewritten from scratch. It was neither clean nor tested. It
+> sorted the whole file to resolve alternate positions and never undid the
+> sort, which rewrites the covalent structure LEaP reads from line order; it
+> deleted every residue carrying an insertion code, which sit in the middle of
+> chains by definition, and any `TER` line that carried one, fusing two chains
+> into a single molecule; and it threw away everything after the last `TER`,
+> losing bound ligands and cofactors. On this repo's own `data/1HAO.pdb` it
+> kept 1966 of 2769 atoms and wrote one `TER` where the file has three.
+> See [09-audit-response.md](09-audit-response.md).
 
 ---
 

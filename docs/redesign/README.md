@@ -3,10 +3,23 @@
 **Start here:** read [01-values.md](01-values.md). It is the change everything else
 depends on.
 
-**Status:** design only. No code written yet.
-**Total effort:** about 3 weeks of focused work, split into 10 PRs.
-**Smallest useful first step:** fix one bug in `chain.py`. About 2 hours. See
-[07-migration.md](07-migration.md).
+**Status:** built, on the branch `worktree-redesign-experimental`. These pages
+are kept as the design they were written as, so the reasoning behind each
+decision is still readable. Where the built code deviates from what a page
+proposes, the page says so in a **Built as** note.
+
+Two things happened that these pages did not anticipate, and both are worth
+knowing before reading further:
+
+- The old code is gone rather than deprecated. No compatibility shim was
+  written, so `Complex`, `Chain`, `Structure`, `space` and `run` no longer
+  exist and nothing imports them.
+- An adversarial audit of the science ([PR #45]) landed while this was being
+  built, and fixing what it found changed several decisions these pages had
+  already made — including which score the search uses.
+  [09-audit-response.md](09-audit-response.md) is the record of that.
+
+[PR #45]: https://github.com/gc-os-ai/MAWS_2025/pull/45
 
 ---
 
@@ -83,6 +96,7 @@ Then:
 | [06-cli.md](06-cli.md) | CLI and the Python API | 10 min |
 | [07-migration.md](07-migration.md) | 10 PRs in order, with time estimates | 10 min |
 | [08-patterns.md](08-patterns.md) | What the design is called; OpenMM/sklearn conventions | 10 min |
+| [09-audit-response.md](09-audit-response.md) | The science defects the audit found, and what was done | 12 min |
 
 ---
 
@@ -154,7 +168,7 @@ score = entropy_score(energies, beta=0.01)
 from itertools import islice
 import numpy as np
 
-from maws import Assembly, ForceField, build, entropy_score, rna
+from maws import Assembly, ForceField, build, free_energy_score, rna
 from maws.sampling import SurfaceSampler, TorsionAngles
 
 rng = np.random.default_rng(0)                       # one seed, whole run repeatable
@@ -179,7 +193,7 @@ for placement in islice(sampler, 5000):              # the loop reads top to bot
     pose = pose.rotate_all(torsions, angles.sample())  # give it a shape
     energies.append(energy.evaluate(pose))           # score it
 
-score = entropy_score(energies, beta=0.01)
+score = free_energy_score(energies, beta=0.01)
 ```
 
 The loop is the point. It has the same shape as a PyTorch training loop — iterate a
@@ -195,24 +209,40 @@ sites, chain-by-index, and the global RNG that made runs unrepeatable.
 
 ## Not changing
 
-- **The science.** Bondi radii, SAS rejection, the entropy score, GB salt
-  screening, and the grow-by-one-nucleotide strategy stay exactly as they are.
-- **`pdb_cleaner.py`** (655 lines). Already clean and tested. It only moves.
-- **`prepare.make_lib`.** Same behaviour, plus a caller-supplied residue name.
-- **The `.maws_cache/` format.** Same SHA1-keyed `.prmtop`/`.inpcrd` pairs.
+This was the plan. Three of the four did not survive contact with the audit.
+
+- **The science.** ~~Bondi radii, SAS rejection, the entropy score, GB salt
+  screening, and the grow-by-one-nucleotide strategy stay exactly as they
+  are.~~
+  **Built as:** Bondi radii, GB salt screening and grow-by-one-nucleotide are
+  unchanged. The SAS rejection now tests the strand's atoms rather than one
+  point, and the entropy score is no longer the default — it preferred
+  candidates that mostly clash. See
+  [09-audit-response.md](09-audit-response.md).
+- **`pdb_cleaner.py`** ~~(655 lines). Already clean and tested. It only
+  moves.~~
+  **Built as:** rewritten. It was neither clean nor tested: it sorted the file
+  and never undid the sort, deleted residues out of the middle of chains, and
+  threw away everything after the last `TER`. See
+  [09-audit-response.md](09-audit-response.md).
+- **`prepare.make_lib`.** Same behaviour, plus a caller-supplied residue name
+  — and a net charge, which `antechamber` was never given.
+- **The `.maws_cache/` format.** Same SHA1-keyed `.prmtop`/`.inpcrd` pairs,
+  keyed on the contents rather than the name.
 
 ---
 
-## 3 questions for you
+## The 3 questions, answered
 
-1. **Is `rotate_in_residue` applying each torsion 3 times on purpose?** See
-   [01-values.md](01-values.md#2-the-bug-this-makes-impossible). If it is a bug,
-   fixing it changes the numbers every past run produced. Fix it before the
-   redesign so the two effects stay separate.
-2. **Delete `Complex.rigid_minimize`?** It raises `TypeError` on its first
-   iteration and nothing calls it. See [04-energy.md](04-energy.md).
-3. **Does anything outside this repo import `maws.complex.Complex`?**
-   That sets how long the compatibility shim lives.
+1. **Is `rotate_in_residue` applying each torsion 3 times on purpose?** No, it
+   was a bug. It is gone with the code that held it, and
+   `Pose.rotate_all` applies each turn exactly once — checked by turning every
+   bond of a real strand and measuring every bond length.
+2. **Delete `Complex.rigid_minimize`?** Deleted, along with `Complex`. Settling
+   is now `maws.relax.perturb_and_minimize`, which takes the atoms that may
+   move so the target stays where it is.
+3. **Does anything outside this repo import `maws.complex.Complex`?** Treated
+   as no. There is no shim; the branch is a clean break.
 
 **Next:** open [01-values.md](01-values.md).
 </content>
