@@ -682,6 +682,85 @@ class TestMakeSamplerModes:
                 probe=-1.0,
             )
 
+    def test_a_site_centre_moves_the_sampling_region(
+        self, synthetic_octahedron_complex
+    ):
+        """Given a site, every pose is drawn around it.
+
+        The auto-sized region is a sphere on the target's centre of mass wide
+        enough to hold the whole target. Someone who knows where the binding
+        site is can spend the whole sample budget there instead.
+        """
+        from maws.space import make_sampler
+
+        centre = np.array([30.0, 0.0, 0.0])
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            site_centre=centre,
+            site_radius=4.0,
+            rng=0,
+        )
+        for _ in range(20):
+            assert np.linalg.norm(sampler.generator().position - centre) <= 4.0
+
+    def test_without_a_site_centre_the_region_holds_the_whole_target(
+        self, synthetic_octahedron_complex
+    ):
+        """The auto-sized region is unchanged when no site is given.
+
+        The fixture's atoms sit 5 A from the origin, so with reach 10 the
+        region is a sphere of radius 15 on the origin.
+        """
+        from maws.space import make_sampler
+
+        sampler = make_sampler(synthetic_octahedron_complex, rng=0)
+        assert sampler.envelope.radius == 15.0
+        assert np.allclose(sampler.envelope.centre, [0.0, 0.0, 0.0])
+
+    def test_a_site_radius_alone_is_rejected(self, synthetic_octahedron_complex):
+        """A radius means nothing without the centre it belongs to."""
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="site_centre"):
+            make_sampler(synthetic_octahedron_complex, site_radius=4.0)
+
+    def test_rejects_a_non_positive_site_radius(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="site_radius must be > 0"):
+            make_sampler(
+                synthetic_octahedron_complex,
+                site_centre=np.zeros(3),
+                site_radius=0.0,
+            )
+
+    def test_rejects_a_site_centre_that_is_not_a_point(
+        self, synthetic_octahedron_complex
+    ):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="three"):
+            make_sampler(synthetic_octahedron_complex, site_centre=[1.0, 2.0])
+
+    def test_a_site_centre_needs_sphere_mode(self, synthetic_octahedron_complex):
+        """Surface-following covers the whole surface, so a site would be ignored."""
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="site_centre"):
+            make_sampler(
+                synthetic_octahedron_complex,
+                mode="surface-following",
+                site_centre=np.zeros(3),
+            )
+
     def test_both_modes_yield_clear_samples(self, synthetic_octahedron_complex):
         from maws.space import Excluder, make_sampler
 

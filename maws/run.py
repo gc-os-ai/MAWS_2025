@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,6 +19,7 @@ from maws.routines import entropy_score
 
 AptamerType = Literal["RNA", "DNA"]
 MoleculeType = Literal["protein", "organic", "lipid"]
+SamplerMode = Literal["sphere", "surface-following"]
 PDBInput = str | Path
 
 
@@ -63,7 +65,11 @@ class MawsRunner:
         remove_h: bool = False,
         drop_hetatm: bool = False,
         verbose: bool = False,
+        sampler_mode: SamplerMode = "sphere",
         reach: float = 10.0,
+        d_max: float = 6.0,
+        site_centre: Sequence[float] | None = None,
+        site_radius: float | None = None,
         probe: float = 1.4,
         clash_tolerance: float = 1.0,
         salt_conc: float = 0.15,
@@ -97,7 +103,11 @@ class MawsRunner:
         self.remove_h = remove_h
         self.drop_hetatm = drop_hetatm
         self.verbose = verbose
+        self.sampler_mode = sampler_mode
         self.reach = reach
+        self.d_max = d_max
+        self.site_centre = site_centre
+        self.site_radius = site_radius
         self.probe = probe
         self.clash_tolerance = clash_tolerance
         self.salt_conc = salt_conc
@@ -229,7 +239,14 @@ class MawsRunner:
         ligand_only.build()
 
         sampler = space.make_sampler(
-            ligand_only, reach=self.reach, probe=self.probe, rng=rng
+            ligand_only,
+            mode=self.sampler_mode,
+            reach=self.reach,
+            d_max=self.d_max,
+            site_centre=self.site_centre,
+            site_radius=self.site_radius,
+            probe=self.probe,
+            rng=rng,
         )
         rotations = space.NAngles(N_BACKBONE_TORSIONS, rng=rng)
 

@@ -606,8 +606,9 @@ class SurfaceSampler:
                 return sample
         raise SamplingError(
             f"Could not draw a clear point in {self.max_rejections} attempts. "
-            f"Envelope may be fully buried - increase --reach, decrease --probe, "
-            f"or check ligand size."
+            f"The region may lie inside the target - widen it with --reach, or "
+            f"with --site-radius if a site centre was given, decrease --probe, "
+            f"or check the ligand size."
         )
 
 
@@ -715,6 +716,8 @@ def make_sampler(
     reach: float = 10.0,
     d_max: float = 6.0,
     probe: float = 1.4,
+    site_centre=None,
+    site_radius: float | None = None,
     rng: int | np.random.Generator | None = None,
 ):
     """
@@ -750,6 +753,15 @@ def make_sampler(
     probe : float, default 1.4
         Probe radius for the SAS rejection (Å), water-equivalent by
         default. Must be ``>= 0``. Used by both modes.
+    site_centre : array-like, optional
+        ``mode="sphere"`` only. Shape ``(3,)`` point in ångström to sample
+        around, in the target's coordinate frame. Give it when the binding
+        site is known: the whole sample budget is then spent on that site
+        rather than spread over the target's entire surface. Omit it and the
+        region is sized to hold the whole target.
+    site_radius : float, default 15.0
+        How far the region reaches from `site_centre`, in ångström. Applies
+        only alongside `site_centre`. Must be ``> 0``.
     rng : int or numpy.random.Generator, optional
         Source of randomness. Pass a seed to make a run repeatable.
         Defaults to a fresh generator, so runs differ.
@@ -773,10 +785,31 @@ def make_sampler(
     """
     if probe < 0:
         raise ValueError(f"probe must be >= 0, got {probe}")
+    if site_centre is None and site_radius is not None:
+        raise ValueError("site_radius applies only alongside site_centre.")
+    if site_centre is not None:
+        if mode != "sphere":
+            raise ValueError(
+                f"site_centre applies only to mode='sphere', got mode={mode!r}. "
+                f"Surface-following covers the whole surface."
+            )
+        site_centre = np.asarray(site_centre, dtype=float)
+        if site_centre.shape != (3,):
+            raise ValueError(
+                f"site_centre must be a point of three coordinates, got shape "
+                f"{site_centre.shape}"
+            )
+        site_radius = 15.0 if site_radius is None else float(site_radius)
+        if site_radius <= 0:
+            raise ValueError(f"site_radius must be > 0, got {site_radius}")
+
     if mode == "sphere":
         if reach < 0:
             raise ValueError(f"reach must be >= 0, got {reach}")
-        dims = compute_envelope_dims(complex_obj, reach)
+        if site_centre is None:
+            dims = compute_envelope_dims(complex_obj, reach)
+        else:
+            dims = {"radius": site_radius, "centre": site_centre}
         envelope = Sphere(**dims, rng=rng)
         excluder = Excluder(complex_obj, probe=probe)
         return SurfaceSampler(envelope=envelope, excluder=excluder)

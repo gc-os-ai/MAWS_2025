@@ -113,6 +113,44 @@ def parse_args():
         help="How far the envelope extends beyond the ligand surface (Å). Default: 10.",
     )
     parser.add_argument(
+        "--sampler-mode",
+        type=str,
+        default="sphere",
+        choices=["sphere", "surface-following"],
+        help=(
+            "Shape of the region poses are drawn from. 'sphere' fills a ball "
+            "around the target; 'surface-following' keeps poses within "
+            "--d-max of the surface. Default: sphere."
+        ),
+    )
+    parser.add_argument(
+        "--d-max",
+        type=_non_negative_float,
+        default=6.0,
+        help=(
+            "How far from the target's surface a pose may sit (Å), for "
+            "--sampler-mode surface-following. Default: 6."
+        ),
+    )
+    parser.add_argument(
+        "--site-centre",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        default=None,
+        help=(
+            "Sample around this point instead of the whole target, in the "
+            "input PDB's coordinates (Å). Give it when the binding site is "
+            "known, so the whole sample budget is spent there."
+        ),
+    )
+    parser.add_argument(
+        "--site-radius",
+        type=_non_negative_float,
+        default=None,
+        help="How far the region reaches from --site-centre (Å). Default: 15.",
+    )
+    parser.add_argument(
         "--probe",
         type=_non_negative_float,
         default=1.4,
@@ -283,7 +321,16 @@ def main():
         c.build()
 
         # Surface-aware sampler around the ligand (auto-sized envelope + SAS rejection)
-        sampler = space.make_sampler(c, reach=args.reach, probe=args.probe, rng=rng)
+        sampler = space.make_sampler(
+            c,
+            mode=args.sampler_mode,
+            reach=args.reach,
+            d_max=args.d_max,
+            site_centre=args.site_centre,
+            site_radius=args.site_radius,
+            probe=args.probe,
+            rng=rng,
+        )
         rotations = space.NAngles(N_ELEMENTS, rng=rng)
 
         # Tracking best candidate
