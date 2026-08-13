@@ -62,7 +62,7 @@ import numpy as np
 
 from maws.build import Builder
 from maws.energy import EnergyModel, StubEnergy
-from maws.errors import ConfigurationError
+from maws.errors import ConfigurationError, SamplingError
 from maws.pose import ChainView, Pose
 from maws.regrow import grow_chain
 from maws.relax import perturb_and_minimize
@@ -103,6 +103,17 @@ DEFAULT_TORSIONS = 4
 The four backbone bonds of a nucleotide. Varying these changes the strand's
 fold; the remaining bonds move only the base, which matters much less to
 whether the strand binds.
+"""
+
+TRIES_PER_SAMPLE = 20
+"""How many shapes may be thrown away for each one that is kept.
+
+A shape is thrown away when it puts some of the strand inside the target. That
+cannot happen and there is no point scoring it, so another shape is drawn in
+its place. This caps how long that goes on: asking for a thousand shapes draws
+at most twenty thousand before giving up and saying the run is set up wrongly.
+Twenty is generous — a strand that cannot find room next to the target one time
+in twenty is not being placed sensibly to begin with.
 """
 
 
@@ -448,6 +459,7 @@ def grow_aptamer(
                     role=role,
                     builder=builder,
                     energy=energy,
+                    sampler=placements,
                     angles=angles,
                     n_samples=samples,
                     beta=beta,
@@ -463,6 +475,46 @@ def grow_aptamer(
         yield StepCompleted(step=step, winner=best)
 
     yield SearchFinished(winner=best, steps=n_nucleotides)
+
+
+def _check_enough_shapes(energies: Sequence[float], wanted: int, what: str) -> None:
+    """Complain if too few usable shapes were found for one candidate.
+
+    Parameters
+    ----------
+    energies : sequence of float
+        The energies collected, one per shape that was scored.
+    wanted : int
+        How many were asked for.
+    what : str
+        Which candidate this was, quoted in the message.
+
+    Raises
+    ------
+    maws.errors.SamplingError
+        If fewer than `wanted` shapes were found.
+
+    Notes
+    -----
+    Every candidate is scored on the same number of shapes, so that the scores
+    can be compared. Letting a candidate be scored on fewer would quietly make
+    the comparison unfair: a strand with barely any room next to the target
+    would be judged on a handful of shapes while its rivals were judged on a
+    thousand.
+
+    Running out means nearly every shape tried put the strand inside the
+    target. That is a set-up problem, not a fact about the molecule, so it is
+    raised rather than worked around.
+    """
+    if len(energies) >= wanted:
+        return
+    raise SamplingError(
+        f"only {len(energies)} of the {wanted} shapes asked for kept {what} "
+        f"clear of the target, out of {wanted * TRIES_PER_SAMPLE} tried. The "
+        f"strand is being placed where there is no room for it: try a larger "
+        f"reach or d_max, or check that the target's own atoms are where they "
+        f"should be."
+    )
 
 
 def _best_of(candidates: Sequence[Candidate]) -> Candidate:
@@ -551,13 +603,18 @@ def _seed_candidate(
     energies: list[float] = []
     best_energy = float("inf")
     best_pose = grown.pose
-    for placement in islice(sampler, n_samples):
+    for placement in islice(sampler, n_samples * TRIES_PER_SAMPLE):
         pose = grown.pose.place(chain, placement)
         pose = pose.rotate_all(torsions, angles.sample(len(torsions)))
+        if not sampler.accepts(pose.atoms(chain.span)):
+            continue
         value = model.evaluate(pose)
         energies.append(value)
         if value < best_energy:
             best_energy, best_pose = value, pose
+        if len(energies) == n_samples:
+            break
+    _check_enough_shapes(energies, n_samples, token)
 
     return Candidate(
         sequence=chain.sequence,
@@ -578,6 +635,7 @@ def _grow_candidate(
     role: str,
     builder: Builder,
     energy: EnergyFactory,
+    sampler: Sampler,
     angles: TorsionAngles,
     n_samples: int,
     beta: float,
@@ -604,6 +662,10 @@ def _grow_candidate(
         What rebuilds the structure.
     energy : EnergyFactory
         Builds the scorer for the rebuilt structure.
+    sampler : maws.sampling.Sampler
+        Asked whether each shape tried keeps the strand out of the target.
+        Only :meth:`~maws.sampling.Sampler.accepts` is used here: where the
+        strand sits was settled by the first step and is not proposed again.
     angles : maws.sampling.TorsionAngles
         Supplies the random shapes.
     n_samples : int
@@ -652,12 +714,17 @@ def _grow_candidate(
     energies: list[float] = []
     best_energy = float("inf")
     best_pose = start
-    for _ in range(n_samples):
+    for _ in range(n_samples * TRIES_PER_SAMPLE):
         pose = start.rotate_all(torsions, angles.sample(len(torsions)))
+        if not sampler.accepts(pose.atoms(chain.span)):
+            continue
         value = model.evaluate(pose)
         energies.append(value)
         if value < best_energy:
             best_energy, best_pose = value, pose
+        if len(energies) == n_samples:
+            break
+    _check_enough_shapes(energies, n_samples, f"{token} at the {direction} end")
 
     return Candidate(
         sequence=chain.sequence,

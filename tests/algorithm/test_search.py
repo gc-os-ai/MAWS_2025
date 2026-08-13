@@ -14,10 +14,11 @@ import numpy as np
 import pytest
 
 from maws.build import FakeBuilder
-from maws.errors import ConfigurationError
+from maws.errors import ConfigurationError, SamplingError
 from maws.forcefield import ForceField
 from maws.libraries import rna
 from maws.regrow import grow_chain
+from maws.sampling import Placement, SurfaceSampler
 from maws.search import (
     Candidate,
     CandidateScored,
@@ -316,6 +317,77 @@ class TestStopping:
 
         assert not any(isinstance(e, SearchFinished) for e in seen)
         assert len(seen[-1].winner.sequence) == 2
+
+
+class TestShapesThatBuryTheStrandAreNeverScored:
+    """A shape with the strand inside the target is not a shape at all.
+
+    The sampler proposes where the middle of the strand goes, and rejects a
+    middle that lands inside the target. That is not the same question as
+    whether the strand clears it: a nucleotide is about ten ångström across, so
+    it can have its middle in clear space and its far end buried. The search
+    therefore asks the sampler again once the atoms are actually somewhere.
+    """
+
+    class RefuseEverything:
+        """A sampler that proposes freely and then rejects every shape.
+
+        Stands in for a target the strand can find no room beside, without
+        having to construct one.
+        """
+
+        def sample(self):
+            """Return a placement at the origin, turned not at all."""
+            return Placement(
+                position=np.zeros(3), axis=np.array([0.0, 0.0, 1.0]), angle=0.0
+            )
+
+        def accepts(self, points):
+            """Reject every shape, whatever the atoms did.
+
+            Parameters
+            ----------
+            points : numpy.ndarray
+                Shape ``(N, 3)``, in ångström. Ignored.
+
+            Returns
+            -------
+            bool
+                Always False.
+            """
+            return False
+
+        def __next__(self):
+            return self.sample()
+
+        def __iter__(self):
+            return self
+
+    def test_a_run_with_no_room_at_all_says_so(self, empty_system, builder):
+        """Rather than scoring nothing, or scoring the buried shapes anyway."""
+        with pytest.raises(SamplingError, match="clear of the target"):
+            run_search(empty_system, builder, sampler=self.RefuseEverything())
+
+    def test_the_message_says_how_many_shapes_were_tried(self, empty_system, builder):
+        """So the reader can tell "no room" from "asked for too many"."""
+        with pytest.raises(SamplingError, match="out of 80 tried"):
+            run_search(
+                empty_system, builder, sampler=self.RefuseEverything(), first_samples=4
+            )
+
+    def test_every_shape_scored_keeps_the_strand_clear_of_the_target(
+        self, empty_system, builder, rng
+    ):
+        """The check the search applies, applied again from the outside.
+
+        The winner's positions are the best of the shapes that were scored, so
+        if any buried shape had been let through this is where it would show.
+        """
+        sampler = SurfaceSampler.around(empty_system, rng=rng)
+        events = run_search(empty_system, builder, sampler=sampler)
+        winner = events[-1].winner
+        strand = winner.system.chain("aptamer").span
+        assert sampler.excluder.all_clear(winner.pose.atoms(strand))
 
 
 class TestDegreesOfFreedom:

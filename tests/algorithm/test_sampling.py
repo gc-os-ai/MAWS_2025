@@ -167,6 +167,48 @@ class TestExcluder:
             Excluder(np.zeros((1, 3)), ["C"], probe=-0.5)
 
 
+class TestExcludingAWholeMolecule:
+    """A strand is not a point, so every one of its atoms has to be checked.
+
+    A nucleotide is about ten ångström across. Testing only where its middle
+    went would let it be placed with the middle in clear space and half the
+    atoms buried inside the target, which is what ``all_clear`` is for.
+    """
+
+    def test_a_set_of_positions_all_well_away_is_acceptable(self):
+        """Nothing is near the target, so nothing overlaps it."""
+        assert lone_carbon().all_clear(np.array([[20.0, 0, 0], [10.0, 5, 0]]))
+
+    def test_one_atom_inside_the_target_blocks_the_whole_molecule(self):
+        """It only takes one. The other atom here is 20 Å clear."""
+        assert not lone_carbon().all_clear(np.array([[20.0, 0, 0], [0.5, 0, 0]]))
+
+    def test_a_middle_that_clears_the_target_is_not_enough(self):
+        """The case the single-point test gets wrong, written out.
+
+        Three atoms in a line, five ångström apart. Their middle sits 5 Å from
+        the target's atom and clears it comfortably, while the first of them is
+        right on top of it.
+        """
+        atoms = np.array([[0.0, 0, 0], [5.0, 0, 0], [10.0, 0, 0]])
+        middle = atoms.mean(axis=0)
+        assert lone_carbon().is_clear(middle)
+        assert not lone_carbon().all_clear(atoms)
+
+    def test_a_molecule_with_no_atoms_is_acceptable(self):
+        """An empty strand is what the search starts from, and it clashes with
+        nothing."""
+        assert lone_carbon().all_clear(np.zeros((0, 3)))
+
+    def test_it_agrees_with_the_single_point_test_on_single_points(self):
+        """One is the other applied many times, so they cannot disagree."""
+        for distance in (0.5, 3.0, 3.2, 20.0):
+            point = along_x(distance)
+            assert lone_carbon().all_clear(point[None, :]) == lone_carbon().is_clear(
+                point
+            )
+
+
 class TestUnknownElements:
     """What happens when an atom's symbol is not one of the listed ones."""
 

@@ -163,8 +163,9 @@ class Envelope(Protocol):
 class Sampler(Protocol):
     """Anything that produces an unending stream of placements.
 
-    Implementing :meth:`sample` is enough; :class:`SurfaceSampler` and the
-    others also support ``next()`` and ``for`` loops.
+    Implementing :meth:`sample` and :meth:`accepts` is enough;
+    :class:`SurfaceSampler` and the others also support ``next()`` and ``for``
+    loops.
     """
 
     def sample(self) -> Placement:
@@ -174,6 +175,27 @@ class Sampler(Protocol):
         -------
         Placement
             The next placement in the stream.
+        """
+        ...
+
+    def accepts(self, points: np.ndarray) -> bool:
+        """Say whether a molecule sitting at these positions is acceptable.
+
+        A placement says where the middle of the strand goes. The strand is
+        not a point, so a middle that clears the target is not the same as a
+        strand that clears it. This is asked once the placement has been
+        applied and the atoms are known.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Shape ``(N, 3)``. Where the strand's atoms have ended up, in
+            ångström.
+
+        Returns
+        -------
+        bool
+            True when the shape is acceptable and should be scored.
         """
         ...
 
@@ -199,6 +221,25 @@ class _IterableSampler:
             The next placement.
         """
         raise NotImplementedError
+
+    def accepts(self, points: np.ndarray) -> bool:
+        """Accept any arrangement of the atoms.
+
+        The default for samplers that know nothing about a target, such as
+        :class:`FixedSampler` and a bare :class:`Sphere`. The ones built around
+        a target override this.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Shape ``(N, 3)``, in ångström. Ignored.
+
+        Returns
+        -------
+        bool
+            Always True.
+        """
+        return True
 
     def __next__(self) -> Placement:
         return self.sample()
@@ -458,6 +499,56 @@ class Excluder:
         gaps = self._positions[nearby] - np.asarray(point, dtype=np.float64)
         return bool(((gaps**2).sum(axis=1) > self._reach[nearby] ** 2).all())
 
+    def all_clear(self, points: np.ndarray) -> bool:
+        """Say whether every one of many positions clears the target.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Shape ``(N, 3)``. The positions to test, in ångström. An empty
+            array is acceptable and passes.
+
+        Returns
+        -------
+        bool
+            True when no position is inside the target.
+
+        See Also
+        --------
+        is_clear : The same test for one position.
+
+        Notes
+        -----
+        This is what a whole molecule has to pass. Testing only where its
+        middle went says nothing about the rest of it: a nucleotide is about
+        ten ångström across, so it can have its middle in clear space and half
+        its atoms buried in the target.
+
+        Examples
+        --------
+        A carbon at the origin blocks anything within 3.1 Å of it, so a pair
+        of positions is only clear when both of them are:
+
+        >>> import numpy as np
+        >>> excluder = Excluder(np.zeros((1, 3)), ["C"])
+        >>> excluder.all_clear(np.array([[10.0, 0, 0], [20.0, 0, 0]]))
+        True
+        >>> excluder.all_clear(np.array([[10.0, 0, 0], [0.5, 0, 0]]))
+        False
+        """
+        points = np.asarray(points, dtype=np.float64)
+        if points.size == 0:
+            return True
+        for nearby, point in zip(
+            self._tree.query_ball_point(points, self._widest), points, strict=True
+        ):
+            if not nearby:
+                continue
+            gaps = self._positions[nearby] - point
+            if not ((gaps**2).sum(axis=1) > self._reach[nearby] ** 2).all():
+                return False
+        return True
+
 
 def _radius_of(symbol: str) -> float:
     """Return how much room one element takes up, in ångström.
@@ -562,6 +653,28 @@ class SurfaceSampler(_IterableSampler):
             f"tries. The region being drawn from may lie inside the target: "
             f"try a larger reach, a smaller probe, or check the target's size."
         )
+
+    def accepts(self, points: np.ndarray) -> bool:
+        """Say whether the strand, once placed, clears the target.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Shape ``(N, 3)``. Where the strand's atoms ended up, in ångström.
+
+        Returns
+        -------
+        bool
+            True when no atom of the strand is inside the target.
+
+        Notes
+        -----
+        :meth:`sample` already rejects positions inside the target, but the
+        position it tests is where the middle of the strand goes. This is the
+        same test applied to every atom, which is the question that actually
+        matters and cannot be asked until the placement has been applied.
+        """
+        return self.excluder.all_clear(points)
 
     @classmethod
     def around(
@@ -717,6 +830,29 @@ class SurfaceFollowingSampler(_IterableSampler):
             f"{self._max_rejections} tries. d_max may be too small, or the "
             f"target unusually densely packed."
         )
+
+    def accepts(self, points: np.ndarray) -> bool:
+        """Say whether the strand, once placed, clears the target.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Shape ``(N, 3)``. Where the strand's atoms ended up, in ångström.
+
+        Returns
+        -------
+        bool
+            True when no atom of the strand is inside the target.
+
+        Notes
+        -----
+        Only the surface test is repeated here, not the shell test. Whether
+        the middle of the strand sits within `d_max` of the target is what
+        decides where to try putting it; once it is there, the far end of the
+        strand reaching beyond the shell is not a reason to throw the shape
+        away.
+        """
+        return self._excluder.all_clear(points)
 
     @classmethod
     def around(
