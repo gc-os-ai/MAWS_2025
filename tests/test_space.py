@@ -12,6 +12,8 @@ Surface-aware sampling primitives:
 import math
 
 import numpy as np
+import pytest
+from openmm import unit
 
 from maws.space import _BONDI_VDW_RADII, _DEFAULT_VDW, NAngles
 
@@ -488,6 +490,77 @@ class TestDrawClearConformation:
                 _StubClash(999),
                 max_rejections=5,
             )
+
+
+class TestModeAndSiteCompose:
+    """The region's shape and where it is aimed are independent settings.
+
+    ``mode`` picks the shape - a solid ball, or a band over the target's
+    surface - and ``site_centre`` says where the region sits and how far it
+    reaches. Every combination of the two is meaningful, so none may be
+    rejected.
+
+    Restricting ``site_centre`` to one mode is what these tests guard against.
+    It held while that mode was the default, and quietly made a known binding
+    site unusable the moment the default changed. See issue #48.
+    """
+
+    # The octahedron fixture puts a carbon 5 A out along each axis.
+    SITE = np.array([5.0, 0.0, 0.0])
+    SITE_RADIUS = 8.0
+    D_MAX = 6.0
+
+    @pytest.mark.parametrize("mode", ["sphere", "surface-following"])
+    @pytest.mark.parametrize("aimed", [False, True])
+    def test_every_combination_honours_every_constraint(
+        self, synthetic_octahedron_complex, mode, aimed
+    ):
+        """All four combinations draw poses, and each one obeys what it asked for."""
+        from maws.space import Excluder, make_sampler
+
+        site = {"site_centre": self.SITE, "site_radius": self.SITE_RADIUS}
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            mode=mode,
+            d_max=self.D_MAX,
+            rng=0,
+            **(site if aimed else {}),
+        )
+
+        excluder = Excluder(synthetic_octahedron_complex, probe=1.4)
+        atoms = np.asarray(
+            synthetic_octahedron_complex.positions.value_in_unit(unit.angstrom),
+            dtype=float,
+        )
+
+        for _ in range(25):
+            pos = sampler.generator().position
+            assert excluder.is_clear(pos), "pose landed inside the target"
+            if aimed:
+                assert np.linalg.norm(pos - self.SITE) <= self.SITE_RADIUS + 1e-9, (
+                    "pose left the site it was aimed at"
+                )
+            if mode == "surface-following":
+                gap = np.linalg.norm(atoms - pos, axis=1).min()
+                assert gap <= self.D_MAX + 1e-9, "pose drifted off the surface"
+
+    def test_the_shipped_defaults_accept_a_site(self, synthetic_octahedron_complex):
+        """A site can be given without naming a mode.
+
+        This is the exact call that broke: aiming at a binding site must not
+        require opting out of whichever mode ships as the default.
+        """
+        from maws.space import make_sampler
+
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            site_centre=self.SITE,
+            site_radius=self.SITE_RADIUS,
+            rng=0,
+        )
+        for _ in range(10):
+            pos = sampler.generator().position
+            assert np.linalg.norm(pos - self.SITE) <= self.SITE_RADIUS + 1e-9
 
 
 class TestComputeEnvelopeDims:
