@@ -2,14 +2,24 @@
 maws
 ====
 
-MAWS designs aptamers: short strands of RNA or DNA that fold up against a
-target molecule and stick to it.
+Designing aptamers against a target molecule, by simulation.
 
-Given a structure file for the target, it builds a strand one nucleotide at a
-time. At each step it tries every way of adding one more nucleotide, samples
-thousands of shapes for each, scores how tightly each candidate's energies
-cluster, and keeps the best. Nothing is synthesised and nothing is measured;
-the whole thing is a simulation, and the answer is a sequence to go and try.
+An *aptamer* is a short strand of RNA or DNA — a few dozen *nucleotides*, the
+units such strands are built from, each written as a single letter — that folds
+up against some other molecule and sticks to it. That other molecule is the
+*target*. Aptamers are used much as antibodies are, to recognise one molecule in
+a mixture, and the hard part of making one is deciding which sequence of
+nucleotides to synthesise.
+
+MAWS decides that on a computer. It starts from a PDB file for the target: the
+standard text format for a molecular structure, listing one atom per line with
+its position. From an empty strand it then repeats a single step. Every way of
+adding one more nucleotide is tried — each of the four letters, at either end
+of the strand, so eight candidates. Each candidate is given thousands of random
+shapes, each shape is scored by the potential energy of the whole arrangement,
+and the candidate whose energies cluster most tightly is kept. Nothing is
+synthesised and nothing is measured: the answer is a sequence to go and test at
+the bench.
 
 Three ways in, in increasing order of control:
 
@@ -17,14 +27,19 @@ Three ways in, in increasing order of control:
     One call. Give it a target file and a length, get a sequence back.
 :class:`AptamerDesigner`
     The same run as an object whose settings can be inspected, copied and
-    changed, following scikit-learn's conventions.
+    changed one at a time, following scikit-learn's conventions.
 :func:`grow_aptamer`
     The search itself, reporting each step as it happens so it can be watched,
     logged, or stopped part-way.
 
-Below those sit the pieces they are built from, which can be used directly:
+All three are assembled from parts that are usable on their own:
 :class:`Assembly` describes what to build, :func:`build` builds it,
 :class:`Pose` holds atom positions, and :class:`EnergyModel` scores them.
+
+.. warning::
+    A run at the default settings performs on the order of a million energy
+    evaluations and takes hours. Try a short strand and a few dozen samples
+    first, to confirm the target file and the installation are sound.
 
 Examples
 --------
@@ -33,7 +48,8 @@ Examples
 >>> result.sequence  # doctest: +SKIP
 'G A U C G A U C G A U C G A U'
 
-Running the search against stand-ins, which needs nothing installed:
+The same search run against stand-ins, which needs no molecular modelling
+software installed and finishes in a moment:
 
 >>> import numpy as np
 >>> from maws import Assembly, FakeBuilder, ForceField, grow_aptamer, rna

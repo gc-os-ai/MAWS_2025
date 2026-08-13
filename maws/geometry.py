@@ -4,14 +4,26 @@ maws.geometry
 
 Small vector calculations shared by several parts of MAWS.
 
-Everything here works on plain NumPy arrays of numbers in ångström and returns
-plain numbers. There is no chemistry and no state.
+Three functions, each one line of arithmetic wrapped in a check that the input
+makes sense: a direction of length one, the angle between two directions, and
+the mass-weighted balance point of a group of atoms.
+
+Everything here works on plain NumPy arrays and returns plain numbers.
+Positions are in ångström and masses in daltons; angles come back in radians.
+There is no chemistry and no state, so every function can be called with
+numbers made up on the spot.
+
+See Also
+--------
+maws.pose.rodrigues : Builds the rotation matrix these directions feed.
 
 Examples
 --------
 >>> import numpy as np
 >>> round(angle_between(np.array([1.0, 0, 0]), np.array([0.0, 1, 0])), 6)
 1.570796
+>>> unit_vector(np.array([0.0, 0.0, 5.0]))
+array([0., 0., 1.])
 """
 
 from __future__ import annotations
@@ -26,23 +38,34 @@ __all__ = ["angle_between", "centre_of_mass", "unit_vector"]
 def unit_vector(vector: np.ndarray) -> np.ndarray:
     """Return a vector of length one pointing the same way as `vector`.
 
+    Scaling a vector to length one throws away how long it was and keeps only
+    where it points, which is what a rotation axis or a viewing direction
+    needs.
+
     Parameters
     ----------
     vector : numpy.ndarray
-        Shape ``(3,)``. Any non-zero vector.
+        Shape ``(3,)``. Any non-zero vector, in whatever unit; the unit
+        cancels.
 
     Returns
     -------
     numpy.ndarray
-        Shape ``(3,)``, with length 1.
+        Shape ``(3,)``, with length 1. A new array; `vector` is unchanged.
 
     Raises
     ------
     maws.errors.ConfigurationError
-        If `vector` has zero length, in which case it points nowhere.
+        If `vector` has zero length, in which case it points nowhere. In
+        practice that means two atoms were found at the same position.
+
+    See Also
+    --------
+    angle_between : Compares two directions, using this on each of them.
 
     Examples
     --------
+    >>> import numpy as np
     >>> unit_vector(np.array([0.0, 3.0, 0.0]))
     array([0., 1., 0.])
     """
@@ -53,7 +76,7 @@ def unit_vector(vector: np.ndarray) -> np.ndarray:
 
 
 def angle_between(first: np.ndarray, second: np.ndarray) -> float:
-    """Return the angle between two directions, in radians.
+    r"""Return the angle between two directions, in radians.
 
     Parameters
     ----------
@@ -71,25 +94,46 @@ def angle_between(first: np.ndarray, second: np.ndarray) -> float:
     maws.errors.ConfigurationError
         If either vector has zero length.
 
+    See Also
+    --------
+    unit_vector : What both arguments are reduced to first.
+
     Notes
     -----
+    The angle is the arc-cosine of the dot product of the two directions:
+
+    .. math::
+        \theta = \arccos\!\left(
+            \frac{\mathbf{a} \cdot \mathbf{b}}
+                 {\lVert\mathbf{a}\rVert \, \lVert\mathbf{b}\rVert}
+        \right)
+
     The cosine is clipped to ``[-1, 1]`` before the arc-cosine is taken.
     Rounding in floating-point arithmetic can push it a hair outside that
     range for two nearly-parallel vectors, which would otherwise produce a
     not-a-number result.
+
+    The answer never exceeds π, so it says how far apart two directions are
+    but not which way round they are. Use a signed torsion angle where the
+    sense of the turn matters.
 
     Examples
     --------
     >>> import numpy as np
     >>> round(angle_between(np.array([1.0, 0, 0]), np.array([-1.0, 0, 0])), 6)
     3.141593
+
+    Length makes no difference, only direction:
+
+    >>> round(angle_between(np.array([2.0, 0, 0]), np.array([0.0, 0.5, 0])), 6)
+    1.570796
     """
     cosine = float(np.dot(unit_vector(first), unit_vector(second)))
     return float(np.arccos(np.clip(cosine, -1.0, 1.0)))
 
 
 def centre_of_mass(positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
-    """Return the balance point of a group of atoms.
+    r"""Return the balance point of a group of atoms.
 
     Heavier atoms pull the result towards themselves, so this is not the same
     as the plain average position.
@@ -97,9 +141,11 @@ def centre_of_mass(positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
     Parameters
     ----------
     positions : numpy.ndarray
-        Shape ``(N, 3)``, in ångström.
+        Shape ``(N, 3)`` positions in ångström, one row per atom.
     masses : numpy.ndarray
-        Shape ``(N,)``, in daltons. One entry per atom.
+        Shape ``(N,)`` atomic masses in daltons, in the same order as
+        `positions`. Passing every atom the same mass turns this into the plain
+        average position.
 
     Returns
     -------
@@ -111,6 +157,15 @@ def centre_of_mass(positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
     maws.errors.ConfigurationError
         If the two arrays disagree on how many atoms there are, or the masses
         add up to zero.
+
+    See Also
+    --------
+    maws.pose.Pose.centroid : The unweighted average, which needs no masses.
+
+    Notes
+    -----
+    .. math::
+        \mathbf{c} = \frac{\sum_i m_i \, \mathbf{r}_i}{\sum_i m_i}
 
     Examples
     --------

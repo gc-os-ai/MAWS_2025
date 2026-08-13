@@ -2,21 +2,42 @@
 maws._designer
 ==============
 
-The design run as a configurable object, following scikit-learn's conventions.
+A design run as a configurable object.
 
-:class:`AptamerDesigner` holds the settings for a run and does the work in
-:meth:`~AptamerDesigner.fit`. Results appear as attributes whose names end in an
-underscore, which is scikit-learn's mark for "this only exists once fit has
-run".
+An *aptamer* is a short strand of RNA or DNA that folds up against a target
+molecule and sticks to it; searching for one is what this package does.
+:class:`AptamerDesigner` holds the settings for such a search, runs it in
+:meth:`~AptamerDesigner.fit`, and leaves the answers on itself as attributes
+whose names end in an underscore — ``sequences_``, ``energies_``. That trailing
+underscore is a promise: the attribute does not exist until ``fit`` has run,
+and asking for it before then raises :exc:`AttributeError`.
 
-The conventions are worth following even though scikit-learn is not a
-dependency here. They give a familiar way to configure a run, copy it, change
-one setting, and try again — and because the interface is the one scikit-learn
-expects, its tools work on this class if it is installed.
+The estimator convention
+------------------------
+This layout is the one scikit-learn calls an *estimator*, and it is followed
+here even though scikit-learn is not a dependency. Two rules define it:
 
-MAWS fits the shape scikit-learn calls *transductive*: every target needs its
-own search, and there is no model left over afterwards to apply to a new
-target. So there is a :meth:`~AptamerDesigner.fit` and a
+- Every setting can be passed to ``__init__`` by name, and ``__init__`` stores
+  each one unchanged under that same name and does nothing else. It validates
+  nothing, reads no file, computes nothing.
+- All the work happens in ``fit``, and the settings are checked there, at the
+  moment they are used.
+
+The first rule looks like a restriction and is really what makes the object
+useful. Because each setting is still sitting there under the name it was
+passed in by, the object can be taken apart into a plain dictionary of settings
+with :meth:`~AptamerDesigner.get_params` and an equivalent one rebuilt from
+that dictionary. Copying a configured run, changing one setting and trying
+again is then two lines, and any tool that searches over settings — including
+scikit-learn's own, where it is installed — can drive this class without
+knowing anything about it. A constructor that quietly transformed or
+rejected its arguments would break that round trip. The pleasant side effect is
+that building a designer is instant and cannot fail, so a mistake in the
+settings surfaces at ``fit``, next to the work it affects.
+
+MAWS also fits the shape scikit-learn calls *transductive*: every target needs
+its own search, and nothing is left over afterwards that could be applied to a
+target never searched against. So there is :meth:`~AptamerDesigner.fit` and
 :meth:`~AptamerDesigner.fit_predict`, and no ``predict``.
 
 Examples
@@ -24,6 +45,9 @@ Examples
 >>> designer = AptamerDesigner(n_nucleotides=5, n_samples=50, random_state=0)
 >>> designer.get_params()["n_nucleotides"]
 5
+
+Running it needs a real target file and the modelling software installed:
+
 >>> designer.fit(["target.pdb"])  # doctest: +SKIP
 >>> designer.sequences_[0]  # doctest: +SKIP
 'G A U C G'
@@ -46,12 +70,16 @@ __all__ = ["AptamerDesigner"]
 
 
 class _BaseEstimator:
-    """The part of scikit-learn's estimator interface MAWS needs.
+    """The part of the estimator convention every MAWS designer shares.
 
     Provides :meth:`get_params`, :meth:`set_params` and a readable ``repr``,
-    all derived from the arguments of ``__init__``. That is enough for
-    scikit-learn's own ``clone`` and grid search to work on a subclass, without
-    scikit-learn having to be installed to use one.
+    all worked out by reading the arguments of the subclass's ``__init__``.
+    Nothing has to be listed twice: adding a setting to ``__init__`` is enough
+    for it to show up in all three.
+
+    See Also
+    --------
+    AptamerDesigner : The one class built on this.
 
     Notes
     -----
@@ -59,6 +87,14 @@ class _BaseEstimator:
     own name and does nothing else — no validation, no computation, no reading
     files. Only then can an object be taken apart into its settings and rebuilt
     from them.
+
+    Examples
+    --------
+    >>> designer = AptamerDesigner(n_nucleotides=3, n_samples=10)
+    >>> designer.get_params()["n_samples"]
+    10
+    >>> AptamerDesigner(**designer.get_params()).n_nucleotides
+    3
     """
 
     @classmethod
@@ -68,7 +104,9 @@ class _BaseEstimator:
         Returns
         -------
         list of str
-            Every argument of ``__init__`` except ``self``.
+            Every argument of ``__init__`` except ``self``. Sorted, so that a
+            ``repr`` and a settings dictionary are in a predictable order
+            rather than in the order the arguments happen to be declared.
         """
         signature = inspect.signature(cls.__init__)
         return sorted(name for name in signature.parameters if name != "self")
@@ -79,13 +117,20 @@ class _BaseEstimator:
         Parameters
         ----------
         deep : bool, default=True
-            Accepted for compatibility with scikit-learn. MAWS has no nested
-            objects with their own settings, so it makes no difference.
+            Whether to include the settings of nested objects that have their
+            own. No MAWS setting is such an object, so this makes no
+            difference; it is accepted because tools that drive estimators pass
+            it.
 
         Returns
         -------
         dict
-            Setting name to value.
+            Setting name to value, in sorted order. Passing it back as
+            ``**params`` to the same class builds an equivalent object.
+
+        See Also
+        --------
+        set_params : Changes settings on an object that already exists.
 
         Examples
         --------
@@ -100,12 +145,13 @@ class _BaseEstimator:
         Parameters
         ----------
         **params
-            Setting name to new value.
+            Setting name to new value. Names not mentioned keep the value they
+            have.
 
         Returns
         -------
         _BaseEstimator
-            This object, so calls can be chained.
+            This object, changed in place, so calls can be chained. Not a copy.
 
         Raises
         ------
@@ -113,11 +159,21 @@ class _BaseEstimator:
             If a name is not one of this object's settings. The message lists
             the ones that are.
 
+        See Also
+        --------
+        get_params : Reads the settings back out.
+
         Examples
         --------
         >>> designer = AptamerDesigner()
         >>> designer.set_params(n_nucleotides=7).n_nucleotides
         7
+
+        Copy first to leave the original alone:
+
+        >>> longer = AptamerDesigner(**designer.get_params()).set_params(beta=0.5)
+        >>> designer.beta, longer.beta
+        (0.01, 0.5)
         """
         allowed = self._param_names()
         for name, value in params.items():
@@ -137,69 +193,108 @@ class _BaseEstimator:
 
 
 class AptamerDesigner(_BaseEstimator):
-    """Design an aptamer against each of one or more target molecules.
+    """A configured aptamer design run, over one or more target molecules.
+
+    .. warning::
+        A run at the default settings performs on the order of a million energy
+        evaluations per target and takes hours. Try ``n_nucleotides=3`` and
+        ``n_samples=50`` first, to confirm the target files and the
+        installation are sound.
 
     Parameters
     ----------
     n_nucleotides : int, default=15
-        How many nucleotides each finished strand should have.
+        How many nucleotides each finished strand should have. Each one costs
+        another full round of sampling, so the run time grows with it.
     aptamer : {"RNA", "DNA"}, default="RNA"
-        Which nucleic acid to build the strand from.
+        Which nucleic acid to build the strands from. RNA strands are written
+        with the letters ``G A U C`` and DNA with ``G A T C``.
     molecule : {"protein", "organic", "lipid"}, default="protein"
-        What the targets are. Decides which parameters describe them.
+        What the targets are. This picks the force field used for them — the
+        table of numbers that turns a set of atom positions into an energy.
+        Proteins and lipids have ready-made parameters; an organic molecule has
+        its own worked out at the start of each run, taking extra minutes.
     n_samples : int, default=5000
         How many shapes to try per candidate at each growth step. The main cost
-        of a run.
+        of a run, and roughly proportional to how long one takes. Raising it
+        searches each candidate more thoroughly.
     n_first_samples : int, optional
-        How many shapes to try on the first step. Defaults to `n_samples`.
+        How many shapes to try on the first step, which also searches over
+        where next to the target to put the strand. Raising it beyond
+        `n_samples` buys a better starting position, which every later step
+        builds on. Defaults to `n_samples`.
     beta : float, default=0.01
-        How sharply lower energies are favoured, in mol/kJ.
+        How sharply lower energies are favoured, in mol/kJ. Raising it makes
+        the choice between candidates depend mostly on their few best shapes;
+        at zero every shape weighs the same and no candidate can win.
     salt_conc : float, default=0.15
-        Concentration of dissolved salt in mol/L.
+        Concentration of dissolved salt in mol/L. Dissolved ions gather around
+        charged atoms and damp the pull between them, so raising this weakens
+        every electrostatic interaction. The default is roughly the saltiness
+        of blood.
     reach : float, default=10.0
-        How far past a target's furthest atom the strand may be placed, in
-        ångström.
+        How far past a target's furthest atom the sampling region extends, in
+        ångström. Larger values consider positions further from the target, at
+        the cost of more proposals landing in empty space. Only used when
+        `sampling` is ``"sphere"``.
     probe : float, default=1.4
         Radius in ångström of the ball rolled over a target to find its
-        surface.
+        surface. 1.4 Å is the size of a water molecule, the usual choice.
+        Larger values smooth over narrow clefts, so no strand is offered a
+        position inside one.
     sampling : {"sphere", "surface-following"}, default="sphere"
-        Which region to draw positions from.
+        Which region to draw positions from. ``"sphere"`` fills a ball around
+        the target; ``"surface-following"`` keeps to a shell hugging its
+        surface, which concentrates the search where contact is possible but
+        rejects far more proposals.
     relax_iterations : int, default=50
-        How many nudge-and-settle rounds to run after each nucleotide is joined
-        on.
+        How many rounds of nudging the atoms and letting them settle to run
+        after each nucleotide is joined on. Joining leaves the new residue
+        strained against its neighbour, and each round works some of that out.
+        Zero skips it and is much faster, at the cost of scoring strained
+        shapes.
     random_state : int, optional
-        Fixes the randomness, so the same settings give the same answer.
+        Fixes the randomness, so the same settings give the same answer. Left
+        out, every run differs.
     verbose : int, default=0
-        How much to report while running. Zero is silent.
+        How much to report while running. Zero is silent; anything else prints
+        a line naming each target as it is started.
 
     Attributes
     ----------
     sequences_ : list of str
-        The designed strand for each target, in the order the targets were
-        given.
+        The designed strand for each target, written 5' to 3', in the order the
+        targets were given.
     energies_ : numpy.ndarray
-        Shape ``(n_targets,)``. Best energy found for each, in kJ/mol.
+        Shape ``(n_targets,)``. Best energy found for each, in kJ/mol. Energies
+        for different targets are not comparable with each other.
     entropies_ : numpy.ndarray
-        Shape ``(n_targets,)``. The score that chose each strand. Lower is
-        better.
+        Shape ``(n_targets,)``. The score that chose each strand, dimensionless
+        and lower-is-better.
     results_ : list of maws.api.MawsResult
-        The full result for each target, including its final structure.
+        The full result for each target, including its final structure and
+        whether the run reached the requested length.
     n_steps_ : int
-        How many nucleotides were added per strand.
+        The strand length the run aimed at, repeated here for convenience. A
+        run that stopped early still leaves this at what was asked for; the
+        matching entry of ``results_`` says what was actually reached.
 
     See Also
     --------
     maws.design : The same run as a single function call.
+    maws.search.grow_aptamer : The same search, reporting step by step.
+    maws.api.MawsResult : What each entry of ``results_`` is.
 
     Notes
     -----
     Every argument is stored exactly as given and nothing else happens until
     :meth:`fit` is called. Nothing is validated in the constructor, and no file
-    is read, so building one of these is instant and cannot fail.
+    is read, so building one of these is instant and cannot fail; a bad setting
+    is reported by ``fit``.
 
-    .. warning::
-        A run at the default settings performs on the order of a million energy
-        evaluations per target and takes hours.
+    Targets are designed against one after another, in the order given. Each
+    gets its own search, and `random_state` is used for every one of them, so
+    two identical targets in the same list give identical answers.
 
     Examples
     --------
@@ -248,25 +343,50 @@ class AptamerDesigner(_BaseEstimator):
     def fit(self, X: Sequence[str | Path], y: object = None) -> AptamerDesigner:
         """Design an aptamer for every target in `X`.
 
+        This is where the whole run happens; expect it to take hours at the
+        default settings.
+
         Parameters
         ----------
         X : sequence of str or pathlib.Path
-            Paths to the targets' structure files, in PDB format.
+            Paths to the targets' structure files, in PDB format: the standard
+            text format for a molecular structure, one atom per line with its
+            position. One search is run per entry.
         y : ignored
-            Accepted for consistency with scikit-learn's interface, which
-            passes labels here. MAWS has none.
+            Accepted for consistency with the estimator convention, which
+            passes labels here. A design run has none.
 
         Returns
         -------
         AptamerDesigner
-            This object, with its result attributes filled in.
+            This object, changed in place, with its result attributes filled
+            in. Returned so that ``designer.fit(targets).sequences_`` reads in
+            one line.
 
         Raises
         ------
         maws.errors.ConfigurationError
             If a setting is not one of the allowed values, or `X` is empty.
         maws.errors.ToolchainError
-            If AmberTools is not installed.
+            If AmberTools, the molecular modelling suite the structures are
+            assembled with, is not installed.
+
+        See Also
+        --------
+        fit_predict : Runs this and hands back the strands directly.
+
+        Examples
+        --------
+        >>> designer = AptamerDesigner(n_nucleotides=5, n_samples=50)
+        >>> designer.fit(["target.pdb"]).sequences_  # doctest: +SKIP
+        ['G A U C G']
+
+        Nothing to design against is an error, caught before any work starts:
+
+        >>> designer.fit([])
+        Traceback (most recent call last):
+            ...
+        maws.errors.ConfigurationError: fit needs at least one target file
         """
         targets = list(X)
         if not targets:
@@ -308,20 +428,31 @@ class AptamerDesigner(_BaseEstimator):
         Parameters
         ----------
         X : sequence of str or pathlib.Path
-            Paths to the targets' structure files.
+            Paths to the targets' structure files, in PDB format.
         y : ignored
-            Accepted for consistency with scikit-learn's interface.
+            Accepted for consistency with the estimator convention.
 
         Returns
         -------
         list of str
-            One strand per target, in the order they were given.
+            One strand per target, in the order they were given. The same list
+            :meth:`fit` leaves in ``sequences_``.
+
+        See Also
+        --------
+        fit : Does the work, and keeps the energies and structures too.
 
         Notes
         -----
         There is no separate ``predict``, because a design run produces nothing
         that could be applied to a target it has not seen. Every target needs
         its own search.
+
+        Examples
+        --------
+        >>> designer = AptamerDesigner(n_nucleotides=5, n_samples=50)
+        >>> designer.fit_predict(["target.pdb"])  # doctest: +SKIP
+        ['G A U C G']
         """
         return self.fit(X, y).sequences_
 
@@ -331,21 +462,35 @@ class AptamerDesigner(_BaseEstimator):
         Parameters
         ----------
         X : ignored
-            Accepted for consistency with scikit-learn's interface.
+            Accepted for consistency with the estimator convention.
         y : ignored
-            Accepted for consistency with scikit-learn's interface.
+            Accepted for consistency with the estimator convention. There is
+            nothing to compare against: a design has no known right answer.
 
         Returns
         -------
         float
-            Mean of the negated scores across every target. Negated because
-            the design score is lower-is-better, while scikit-learn expects
+            Mean of the negated design scores across every target,
+            dimensionless. Negated because a design score is
+            lower-is-better, while a ``score`` method is expected to be
             higher-is-better everywhere.
 
         Raises
         ------
         maws.errors.ConfigurationError
-            If :meth:`fit` has not been called yet.
+            If :meth:`fit` has not been called yet, so there is nothing to
+            score.
+
+        Examples
+        --------
+        Standing in for the attribute :meth:`fit` would have filled in, two
+        targets scoring -0.5 and -0.25 average to 0.375 the other way up:
+
+        >>> import numpy as np
+        >>> designer = AptamerDesigner()
+        >>> designer.entropies_ = np.array([-0.5, -0.25])
+        >>> designer.score()
+        0.375
         """
         if not hasattr(self, "entropies_"):
             raise ConfigurationError(

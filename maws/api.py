@@ -4,19 +4,27 @@ maws.api
 
 Designing an aptamer in one call.
 
-This is the shortest way in. :func:`design` takes a target molecule's structure
-file and gives back the strand it found, hiding the residue libraries, the
-builder, the sampler and the scorer behind sensible defaults.
+An *aptamer* is a short strand of RNA or DNA that folds up against another
+molecule — the *target* — and sticks to it. :func:`design` searches for one.
+Give it a PDB file for the target, the standard text format for a molecular
+structure listing one atom per line with its position, and it hands back the
+strand it settled on. The residue libraries, the program that assembles the
+structures, the sampler that proposes shapes and the score that ranks them are
+all chosen for you.
 
-Everything it does is available separately if the defaults do not suit: see
-:func:`maws.search.grow_aptamer` for the search itself, which reports its
-progress step by step and can be stopped part-way.
+:class:`MawsResult` is what comes back. It carries a sequence whether or not
+the run reached the requested length, so a run that gave up part-way is told
+apart by its ``success`` flag rather than by inspecting the numbers.
+
+Every stage is available on its own when the defaults do not suit.
+:func:`maws.search.grow_aptamer` runs the same search while reporting each step
+as it happens, and :func:`collect` reduces such a stream back to one result.
 
 Examples
 --------
 >>> result = design("target.pdb", length=15)  # doctest: +SKIP
->>> result.sequence  # doctest: +SKIP
-'G A U C G A U C G A U C G A U'
+>>> print(result)  # doctest: +SKIP
+G A U C G A U C G A U C G A U  (15 nt, E=-1421.90 kJ/mol, S=-0.072000)
 """
 
 from __future__ import annotations
@@ -50,7 +58,11 @@ if TYPE_CHECKING:  # pragma: no cover - needed by type checkers only
 __all__ = ["MawsResult", "design"]
 
 SamplingMode = Literal["sphere", "surface-following"]
-"""Which region proposed positions for the aptamer are drawn from."""
+"""Which region proposed positions for the aptamer are drawn from.
+
+``"sphere"`` fills a ball centred on the target; ``"surface-following"`` keeps
+to a thin shell hugging the target's surface.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +72,19 @@ class MawsResult:
     Parameters
     ----------
     sequence : str
-        The designed strand, written 5' to 3', e.g. ``"G A U C"``.
+        The designed strand, written 5' to 3' — the two ends of such a strand
+        are chemically different and are named that way by convention. One
+        whitespace-separated token per nucleotide, e.g. ``"G A U C"``.
     energy : float
-        Potential energy of the best arrangement found, in kJ/mol.
+        Potential energy of the best arrangement found, in kJ/mol. Comparable
+        between runs against the same target only; the number includes the
+        target's own internal energy, which differs from target to target.
     entropy : float
-        The score that chose this strand. Lower is better. See
-        :func:`maws.scoring.entropy_score`.
+        The score that chose this strand, as produced by
+        :func:`maws.scoring.entropy_score`. Dimensionless, and lower is better.
     steps : int
-        How many nucleotides were added.
+        How many nucleotides were added. Equal to the requested length after a
+        run that finished.
     success : bool, default=True
         Whether the run finished as intended. False means `sequence` is
         whatever the run had reached when it stopped, which may be shorter than
@@ -75,17 +92,23 @@ class MawsResult:
     message : str, default=""
         What went wrong, when `success` is False. Empty otherwise.
     system : maws.topology.BuiltSystem, optional
-        The final structure. Present after a real run; useful for writing the
-        result out or scoring it again.
+        The final structure, atoms and force-field parameters together. Present
+        after a real run, and what to pass on to write the result out or score
+        it again. Left out by runs that never built anything.
     pose : maws.pose.Pose, optional
-        Atom positions of the best arrangement found.
+        Atom positions of the best arrangement found, in ångström.
 
     See Also
     --------
     design : Produces one of these.
+    maws.AptamerDesigner : Keeps one of these per target, in ``results_``.
 
     Notes
     -----
+    Comparing two instances ignores `system` and `pose`, so two runs that
+    arrived at the same sequence and scores compare equal even though their
+    structures are separate objects.
+
     `success` and `message` follow the same idea as
     :class:`scipy.optimize.OptimizeResult`: a run that found nothing usable
     should be distinguishable from one that worked, without inspecting the
@@ -98,6 +121,19 @@ class MawsResult:
     3
     >>> print(result)
     G A U  (3 nt, E=-1421.90 kJ/mol, S=-0.072000)
+
+    A run that stopped early says so, and its sequence is short:
+
+    >>> stopped = MawsResult(
+    ...     "G A",
+    ...     -900.0,
+    ...     -0.01,
+    ...     steps=2,
+    ...     success=False,
+    ...     message="the search stopped before it finished",
+    ... )
+    >>> stopped.success, stopped.length
+    (False, 2)
     """
 
     sequence: str
@@ -150,72 +186,111 @@ def design(
 
     Design an aptamer against a target molecule.
 
+    .. warning::
+        A run at the default settings performs on the order of a million
+        energy evaluations and takes hours. Try `samples` of 50 and `length`
+        of 3 first, to confirm the target file and the installation are sound.
+
     Parameters
     ----------
     target : str or pathlib.Path
-        Structure file for the molecule the aptamer should bind to, in PDB
-        format.
+        PDB file for the molecule the aptamer should bind to. It is treated as
+        a single unit: it is never grown and none of its bonds are turned. Its
+        size sets the region the strand is placed in.
     length : int, default=15
-        How many nucleotides the finished strand should have.
+        How many nucleotides the finished strand should have. Each one costs
+        another full round of sampling, so the run time grows with it.
     aptamer : {"RNA", "DNA"}, default="RNA"
-        Which nucleic acid to build the strand from.
+        Which nucleic acid to build the strand from. RNA strands are written
+        with the letters ``G A U C`` and DNA with ``G A T C``, and the two are
+        built from different residue libraries.
     molecule : {"protein", "organic", "lipid"}, default="protein"
-        What the target is. Decides which parameters describe it, and whether
-        they have to be worked out first.
+        What the target is. This picks the force field used for it — the table
+        of numbers that turns a set of atom positions into an energy. Proteins
+        and lipids have ready-made parameters; an organic molecule does not, so
+        its own are worked out at the start of the run, which takes extra
+        minutes.
     samples : int, default=5000
         How many shapes to try per candidate at each growth step. This is the
         main cost: the total work is roughly ``8 * samples * length`` energy
-        evaluations. Lower it to perhaps 50 for a quick check.
+        evaluations. Raising it searches each candidate more thoroughly at
+        proportional cost. Lower it to perhaps 50 for a quick check.
     first_samples : int, optional
         How many shapes to try on the first step, which also searches over
-        where to put the strand. Defaults to `samples`.
+        where next to the target to put the strand. Raising it beyond `samples`
+        buys a better starting position, which every later step builds on.
+        Defaults to `samples`.
     beta : float, default=0.01
-        How sharply lower energies are favoured, in mol/kJ.
+        How sharply lower energies are favoured, in mol/kJ. Raising it makes
+        the choice between candidates depend mostly on their few best shapes;
+        at zero every shape weighs the same and no candidate can win.
     salt_conc : float, default=0.15
-        Concentration of dissolved salt in mol/L. Damps the pull between
-        charged atoms; the default is roughly the saltiness of blood.
+        Concentration of dissolved salt in mol/L. Dissolved ions gather around
+        charged atoms and damp the pull between them, so raising this weakens
+        every electrostatic interaction in the run. The default is roughly the
+        saltiness of blood.
     reach : float, default=10.0
-        How far past the target's furthest atom the strand may be placed, in
-        ångström. Only used when `sampling` is ``"sphere"``.
+        How far past the target's furthest atom the sampling region extends, in
+        ångström. Larger values consider positions further from the target, at
+        the cost of more proposals landing in empty space. Only used when
+        `sampling` is ``"sphere"``.
     probe : float, default=1.4
         Radius in ångström of the ball rolled over the target to find its
         surface. 1.4 Å is the size of a water molecule, the usual choice.
+        Larger values smooth over narrow clefts, so the strand is not offered
+        positions inside them.
     d_max : float, default=6.0
-        Thickness in ångström of the shell positions are drawn from. Only used
-        when `sampling` is ``"surface-following"``.
+        Thickness in ångström of the shell positions are drawn from. Thinner
+        shells hold the strand closer to the surface. Only used when `sampling`
+        is ``"surface-following"``.
     sampling : {"sphere", "surface-following"}, default="sphere"
         Which region to draw positions from. ``"sphere"`` fills a ball around
         the target; ``"surface-following"`` keeps to a shell hugging its
         surface, which concentrates the search where contact is possible but
         rejects far more proposals.
     relax_iterations : int, default=50
-        How many nudge-and-settle rounds to run after each nucleotide is joined
-        on. Zero skips it and is much faster, at the cost of leaving strain at
-        the join.
+        How many rounds of nudging the atoms and letting them settle to run
+        after each nucleotide is joined on. Joining leaves the new residue
+        strained against its neighbour, and each round displaces the atoms a
+        little and minimises the energy again to work that out. Zero skips the
+        whole thing and is much faster, at the cost of scoring strained shapes.
     seed : int, optional
         Fixes the randomness, so the same call gives the same answer. Left out,
         every run differs.
     scorer : maws.scoring.Scorer, default=entropy_score
-        Reduces a candidate's energies to one number, lower being better.
+        Reduces one candidate's energies to the single number the candidates
+        are ranked by, lower being better. Replace it to rank by something
+        other than how tightly the energies cluster.
     builder : maws.build.Builder, optional
-        What builds the structures. Defaults to
-        :class:`~maws.build.LeapBuilder`, which needs AmberTools installed.
+        What turns a sequence into a structure with atom positions. Defaults to
+        :class:`~maws.build.LeapBuilder`, which drives ``tleap``, the
+        structure-assembly program of the molecular modelling suite AmberTools,
+        and so needs AmberTools installed. Pass
+        :class:`~maws.build.FakeBuilder` to exercise the search on stand-in
+        geometry without it.
     clean_pdb : bool, default=False
         Whether to tidy the target file before building: a downloaded
         structure often carries several copies of the molecule, water, and
-        other records that would confuse the builder. Only applied when
-        `molecule` is ``"protein"``.
+        other records that would stop the structure being assembled. Only
+        applied when `molecule` is ``"protein"``.
     keep_chains : str, default="all"
-        Which chains of the target to keep when cleaning: ``"all"``,
-        ``"one"``, or a comma-separated list such as ``"A,B"``.
+        Which chains of the target to keep when cleaning — a chain being one
+        continuous molecule within the file, labelled with a letter. Either
+        ``"all"``, ``"one"`` for the first, or a comma-separated list such as
+        ``"A,B"``. Keeping fewer makes the run cheaper and changes what the
+        strand can reach.
     remove_h : bool, default=False
-        Whether to strip hydrogens while cleaning.
+        Whether to strip hydrogen atoms while cleaning. Useful when the file's
+        hydrogens are named in a way the force field does not recognise, since
+        fresh ones are added when the structure is assembled.
     drop_hetatm : bool, default=False
         Whether to drop records for anything that is not part of the molecule
-        proper, such as bound water or ions.
+        proper, such as bound water or ions. Keep them to design against a
+        target that needs them, at the risk of one having no parameters.
     on_event : callable, optional
         Called with every :class:`~maws.search.StepEvent` as the search
-        produces it. Use it to print progress or write files.
+        produces it. Use it to print progress or write files as the run goes,
+        rather than waiting for the result.
     logger : logging.Logger, optional
         Where to send progress messages. Defaults to this module's logger.
 
@@ -230,24 +305,32 @@ def design(
         If an argument is not one of the allowed values, or the target file
         cannot be read.
     maws.errors.ToolchainError
-        If AmberTools is needed and is not installed.
+        If AmberTools is needed and is not installed, or one of its programs
+        fails.
+    maws.errors.BuildError
+        If the structure-assembly program runs but produces no structure, which
+        usually means the target file holds something it cannot describe.
 
     See Also
     --------
-    maws.search.grow_aptamer : The search, reporting step by step.
     maws.AptamerDesigner : The same run configured as an object.
+    maws.search.grow_aptamer : The same search, reporting step by step.
+    MawsResult : What this returns.
 
     Notes
     -----
-    .. warning::
-        A run at the default settings performs on the order of a million
-        energy evaluations and takes hours. Try `samples` of 50 and `length`
-        of 3 first, to confirm the target file and the installation are sound.
+    Energies are in kJ/mol, lengths in ångström, and concentrations in mol/L.
+
+    No result file is written. The structures built along the way are cached on
+    disk by the builder, and `clean_pdb` leaves a tidied copy of the target
+    next to the original, but everything the run found comes back in the return
+    value or through `on_event`.
 
     Examples
     --------
-    >>> result = design("target.pdb", length=4, samples=50, seed=0)
-    ... # doctest: +SKIP
+    A short run, to check that a target file can be read and built:
+
+    >>> result = design("target.pdb", length=4, samples=50, seed=0)  # doctest: +SKIP
     >>> result.length  # doctest: +SKIP
     4
     """
@@ -302,14 +385,19 @@ def collect(
     *,
     on_event: Callable[[StepEvent], None] | None = None,
 ) -> MawsResult:
-    """Run a search to the end and return only its answer.
+    """collect(events, *, on_event=None) -> MawsResult
+
+    Run a search to the end and return only its answer.
 
     Parameters
     ----------
     events : iterable of maws.search.StepEvent
-        The stream :func:`maws.search.grow_aptamer` produces.
+        The stream :func:`maws.search.grow_aptamer` produces. Reading it is
+        what makes the search run, so this call is where the time goes.
     on_event : callable, optional
-        Called with each event as it arrives, before it is discarded.
+        Called with each event as it arrives, before it is discarded. The only
+        chance to see the intermediate steps, since nothing but the last one
+        is kept.
 
     Returns
     -------
@@ -318,8 +406,15 @@ def collect(
         stream ends without one, the result has ``success=False`` and a
         `message` saying so.
 
+    See Also
+    --------
+    design : Sets up a search and calls this on it.
+    maws.search.grow_aptamer : Produces the stream this consumes.
+
     Examples
     --------
+    A whole search against stand-in geometry, which needs nothing installed:
+
     >>> import numpy as np
     >>> from maws.build import FakeBuilder
     >>> from maws.forcefield import ForceField

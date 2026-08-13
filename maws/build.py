@@ -4,12 +4,20 @@ maws.build
 
 Turning a description of a design into a structure with real coordinates.
 
-An :class:`~maws.topology.Assembly` says which molecules a design contains. It
-holds no coordinates, because working those out means running AmberTools: a set
-of programs, installed separately from this package, that know what a molecule
-made of given residues actually looks like. ``tleap`` builds the structure;
-``antechamber`` and ``parmchk2`` work out parameters for a molecule the force
-field does not already describe.
+An :class:`~maws.topology.Assembly` says which molecules a design contains: an
+aptamer of so many *residues* — single nucleotides — and a target molecule to
+design it against. It holds no coordinates, because working those out means
+running AmberTools: a set of programs, installed separately from this package,
+that know what a molecule made of given residues actually looks like. ``tleap``
+— the command-line form of the modelling program LEaP — builds the structure,
+while ``antechamber`` and ``parmchk2`` work out a *force field* for a molecule
+nothing already describes. A force field is the collection of numbers saying
+how strongly each pair of atoms pulls on or pushes away the other.
+
+Building produces two files, and their extensions are used as their names
+throughout: a *prmtop* holding the force field numbers for this particular
+collection of atoms, and an *inpcrd* holding one position per atom. Both are
+read back at once into a :class:`~maws.topology.BuiltSystem`.
 
 Two builders are provided, and choosing between them is what separates a real
 design run from a test of the search itself.
@@ -24,6 +32,15 @@ design run from a test of the search itself.
     not a molecule and its energies mean nothing, but it has the right number
     of atoms in the right chains, so every part of MAWS that arranges and
     scores atoms can be exercised with nothing installed.
+
+Both satisfy the :class:`Builder` protocol, so anything that builds takes one
+as an argument rather than choosing for itself, and a design run can be tested
+end to end by passing the other.
+
+See Also
+--------
+maws.topology.Assembly : What goes in.
+maws.topology.BuiltSystem : What comes out.
 
 Examples
 --------
@@ -94,14 +111,34 @@ somewhere to put the other.
 class Builder(Protocol):
     """Anything that can turn a design description into a structure.
 
+    Two methods are needed. :meth:`prepare` takes a chain that is still just a
+    filename and works out how many atoms it has, so the design knows how big
+    it is. :meth:`build` takes a whole description and produces positions for
+    every atom in it. Any object with those two methods can be passed wherever
+    a builder is wanted; nothing needs to inherit from this class.
+
+    Checked at run time, so ``isinstance(obj, Builder)`` works, though it only
+    confirms the two methods exist and not what they do.
+
     See Also
     --------
     LeapBuilder : Runs AmberTools; the real one.
     FakeBuilder : Puts atoms on a grid; needs nothing installed.
+
+    Examples
+    --------
+    >>> isinstance(FakeBuilder(), Builder)
+    True
+    >>> isinstance("not a builder", Builder)
+    False
     """
 
     def prepare(self, chain: PdbChain, forcefield: ForceField) -> ResidueChain:
         """Work out how many atoms a molecule read from a file has.
+
+        A design cannot say which stretch of its atom array belongs to the
+        target until the target's size is known, and the only way to know that
+        is to look at the file.
 
         Parameters
         ----------
@@ -113,7 +150,8 @@ class Builder(Protocol):
         Returns
         -------
         maws.topology.ResidueChain
-            The same chain, with its atom count known.
+            The same chain, with its atom count known. Treated from here on as
+            a single rigid residue, however large the molecule is.
         """
         ...
 
@@ -123,14 +161,15 @@ class Builder(Protocol):
         Parameters
         ----------
         assembly : maws.topology.Assembly
-            What to build.
+            What to build. Any chain still described only by a filename is
+            resolved with :meth:`prepare` first.
         forcefield : maws.forcefield.ForceField
             Which parameters to build it with.
 
         Returns
         -------
         maws.topology.BuiltSystem
-            The built structure.
+            The built structure, with one position in ångström per atom.
         """
         ...
 
@@ -144,6 +183,9 @@ def build(
     """build(assembly, forcefield, *, builder=None) -> BuiltSystem
 
     Turn a design description into a structure with coordinates.
+
+    A one-line convenience over calling a builder directly, so that code which
+    has no opinion about how a structure is made does not have to name one.
 
     Parameters
     ----------
@@ -160,9 +202,17 @@ def build(
     maws.topology.BuiltSystem
         The built structure.
 
+    Raises
+    ------
+    maws.errors.ConfigurationError
+        If the assembly has nothing in it to build.
+    maws.errors.ToolchainError
+        If the default builder is used and AmberTools is not installed.
+
     See Also
     --------
     LeapBuilder : What is used by default.
+    FakeBuilder : What to pass when nothing is installed.
 
     Examples
     --------
@@ -268,13 +318,15 @@ class FakeBuilder:
         return f"<FakeBuilder spacing={self._spacing} sep={self._separation}>"
 
     def prepare(self, chain: PdbChain, forcefield: ForceField) -> ResidueChain:
-        """Count the atoms in a PDB file, without running anything.
+        r"""Count the atoms in a PDB file, without running anything.
 
         Parameters
         ----------
         chain : maws.topology.PdbChain
-            The chain to resolve. Its file is read and its ``ATOM`` and
-            ``HETATM`` lines counted.
+            The chain to resolve. Its file is read and its atom lines counted.
+            A PDB file is plain text with one line per atom; those lines start
+            with ``ATOM`` for part of a protein or nucleic acid, and ``HETATM``
+            for anything else, such as a small organic molecule. Both count.
         forcefield : maws.forcefield.ForceField
             Ignored. Accepted so this can stand in for :class:`LeapBuilder`.
 
@@ -287,6 +339,27 @@ class FakeBuilder:
         ------
         maws.errors.ConfigurationError
             If the file cannot be read, or holds no atom records.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> from maws.forcefield import ForceField
+        >>> from maws.topology import PdbChain
+        >>> with tempfile.TemporaryDirectory() as tmp:
+        ...     pdb = Path(tmp) / "target.pdb"
+        ...     _ = pdb.write_text("ATOM      1  N\nHETATM    2  C\nEND\n")
+        ...     chain = PdbChain(
+        ...         role="ligand",
+        ...         path=pdb,
+        ...         residue_name="LIG",
+        ...         parameterized=True,
+        ...     )
+        ...     resolved = FakeBuilder().prepare(
+        ...         chain, ForceField.for_target("RNA", "protein")
+        ...     )
+        ...     resolved.n_atoms
+        2
         """
         try:
             text = chain.path.read_text()
@@ -323,12 +396,36 @@ class FakeBuilder:
         Returns
         -------
         maws.topology.BuiltSystem
-            A structure with one grid per chain.
+            A structure with one grid per chain, in the order the chains appear
+            in the assembly. Every atom is carbon, and no bonds are recorded.
 
         Raises
         ------
         maws.errors.ConfigurationError
-            If the assembly has no chains.
+            If the assembly has no chains, or a chain still described by a file
+            cannot be read.
+
+        Examples
+        --------
+        The atom counts and chain spans are the real ones, so anything that
+        works in terms of those behaves as it would on a real structure:
+
+        >>> from maws.forcefield import ForceField
+        >>> from maws.libraries import rna
+        >>> from maws.topology import Assembly
+        >>> system = FakeBuilder().build(
+        ...     Assembly().with_aptamer(rna(), "G A").with_ligand_stub(10),
+        ...     ForceField.for_target("RNA", "protein"),
+        ... )
+        >>> system.chain("aptamer").span
+        AtomRange(start=0, stop=66)
+        >>> system.chain("ligand").span
+        AtomRange(start=66, stop=76)
+
+        The two chains start 25 Å apart along x:
+
+        >>> system.pose.xyz[66][0]
+        25.0
         """
         chains = _resolved_chains(assembly, forcefield, self)
         if not chains:
@@ -384,19 +481,19 @@ def _grid(n_atoms: int, offset: float, spacing: float) -> np.ndarray:
 
 
 class LeapBuilder:
-    """Builds real structures by running AmberTools.
+    """A builder that produces real structures by running AmberTools.
 
-    Building the same design twice gives the same structure, so results are
-    cached: a name is worked out from the force field, the sequences, and the
-    contents of the parameter files, and a structure already stored under that
-    name is reused instead of being rebuilt. Building a fifteen-residue aptamer
-    takes seconds, and the growth search rebuilds constantly, so this matters.
+    Built structures are cached. The same description always produces the same
+    structure, so a name is worked out from what is being built and the result
+    is stored under it; a later build that finds files already under that name
+    reads them back instead of running ``tleap`` again.
 
     Parameters
     ----------
     cache_dir : pathlib.Path, default=Path(".maws_cache")
         Where built structures are stored. Delete this directory to force
-        everything to be rebuilt.
+        everything to be rebuilt; nothing else has to be done, since a missing
+        entry is simply built again.
     params_dir : pathlib.Path, optional
         Where parameter files worked out for target molecules are written.
         Defaults to a ``params`` directory inside `cache_dir`, which keeps them
@@ -413,14 +510,52 @@ class LeapBuilder:
     See Also
     --------
     FakeBuilder : Builds without AmberTools, for tests.
+    maws.topology.BuiltSystem : What a build produces.
 
     Notes
     -----
-    .. note::
-        The name a structure is cached under includes the *contents* of every
-        parameter file it loads, not just their paths. Two different targets
-        can otherwise produce parameter files with the same name, and reusing
-        one target's structure for another is silent and very hard to spot.
+    Caching is what makes a design run practical. Building a fifteen-residue
+    aptamer takes seconds, and the search that grows one rebuilds constantly:
+    every step tries each of the four nucleotides at each of the two ends, so
+    each step is eight more structures. Reading a stored pair of files back
+    instead turns those seconds into milliseconds.
+
+    The name a structure is stored under covers the force field names, every
+    chain's residue names in order, and the *contents* of every parameter file
+    that will be loaded — not those files' paths.
+
+    .. warning::
+        Hashing the paths would not be enough. A parameter file is named after
+        the residue it describes, so two different target molecules given the
+        same residue name produce files at the same path, and the second
+        design would silently be handed the first one's structure. Hashing
+        what is inside them means a different target always gets a different
+        name.
+
+    Cache entries are never removed, so the directory grows by one pair of
+    files per distinct structure built, until it is deleted by hand.
+
+    Examples
+    --------
+    >>> from maws.forcefield import ForceField  # doctest: +SKIP
+    >>> from maws.libraries import rna  # doctest: +SKIP
+    >>> from maws.topology import Assembly  # doctest: +SKIP
+    >>> builder = LeapBuilder("/tmp/demo_cache")  # doctest: +SKIP
+    >>> system = builder.build(  # doctest: +SKIP
+    ...     Assembly().with_aptamer(rna(), "G A U"),
+    ...     ForceField.for_target("RNA", "protein"),
+    ... )
+    >>> system.n_atoms  # doctest: +SKIP
+    99
+
+    Asking again reads the stored files instead of running ``tleap``:
+
+    >>> again = builder.build(  # doctest: +SKIP
+    ...     Assembly().with_aptamer(rna(), "G A U"),
+    ...     ForceField.for_target("RNA", "protein"),
+    ... )
+    >>> again.n_atoms  # doctest: +SKIP
+    99
     """
 
     __slots__ = ("_cache_dir", "_params_dir", "_resources")
@@ -442,12 +577,12 @@ class LeapBuilder:
 
     @property
     def cache_dir(self) -> Path:
-        """pathlib.Path : Where built structures are stored."""
+        """pathlib.Path : Where built structures are stored, once built."""
         return self._cache_dir
 
     @property
     def params_dir(self) -> Path:
-        """pathlib.Path : Where worked-out parameter files are written."""
+        """pathlib.Path : Where the ``.lib`` and ``.frcmod`` files are put."""
         return self._params_dir
 
     def prepare(self, chain: PdbChain, forcefield: ForceField) -> ResidueChain:
@@ -455,7 +590,13 @@ class LeapBuilder:
 
         Runs ``antechamber`` and ``parmchk2`` to derive parameters when the
         force field does not already describe the molecule, then ``tleap`` to
-        write a residue library file recording what atoms it has.
+        write a ``.lib`` file: a residue definition recording the molecule's
+        atoms, their names and charges, and the bonds between them. That file
+        stays in :attr:`params_dir` and is loaded again by every later build.
+
+        However large the molecule is, it becomes one residue. MAWS never grows
+        the target or turns any of its bonds, so there is nothing to gain from
+        describing it in finer detail.
 
         Parameters
         ----------
@@ -475,6 +616,26 @@ class LeapBuilder:
         ------
         maws.errors.ToolchainError
             If AmberTools is not installed, or one of its programs fails.
+
+        See Also
+        --------
+        maws.io.prepare.make_lib : Does the work of running the three programs.
+
+        Examples
+        --------
+        >>> from maws.forcefield import ForceField  # doctest: +SKIP
+        >>> from maws.topology import PdbChain  # doctest: +SKIP
+        >>> chain = PdbChain(  # doctest: +SKIP
+        ...     role="ligand",
+        ...     path=Path("target.pdb"),
+        ...     residue_name="LIG",
+        ...     parameterized=True,
+        ... )
+        >>> resolved = LeapBuilder().prepare(  # doctest: +SKIP
+        ...     chain, ForceField.for_target("RNA", "protein")
+        ... )
+        >>> resolved.n_atoms  # doctest: +SKIP
+        1462
         """
         from maws.io.prepare import make_lib
 
@@ -503,13 +664,15 @@ class LeapBuilder:
             What to build. Chains still described by a file are resolved first
             by :meth:`prepare`.
         forcefield : maws.forcefield.ForceField
-            Which parameters to build with.
+            Which parameters to build with. Two builds of the same chains under
+            different force fields are cached separately.
 
         Returns
         -------
         maws.topology.BuiltSystem
-            The built structure, with coordinates, element symbols and masses
-            read back from the files ``tleap`` wrote.
+            The built structure: positions in ångström, one element symbol and
+            one mass in daltons per atom, all read back from the files
+            ``tleap`` wrote.
 
         Raises
         ------
@@ -519,6 +682,22 @@ class LeapBuilder:
             If ``tleap`` is not installed, or exits with an error.
         maws.errors.BuildError
             If ``tleap`` finishes but writes no usable structure.
+
+        See Also
+        --------
+        FakeBuilder.build : The same call, without needing anything installed.
+
+        Examples
+        --------
+        >>> from maws.forcefield import ForceField  # doctest: +SKIP
+        >>> from maws.libraries import rna  # doctest: +SKIP
+        >>> from maws.topology import Assembly  # doctest: +SKIP
+        >>> system = LeapBuilder().build(  # doctest: +SKIP
+        ...     Assembly().with_aptamer(rna(), "G"),
+        ...     ForceField.for_target("RNA", "protein"),
+        ... )
+        >>> system.chain("aptamer").span  # doctest: +SKIP
+        AtomRange(start=0, stop=33)
         """
         chains = _resolved_chains(assembly, forcefield, self)
         if not any(chain.sequence for chain in chains):
@@ -544,21 +723,29 @@ class LeapBuilder:
         prmtop: Path,
         inpcrd: Path,
     ) -> str:
-        """Write the input script that tells ``tleap`` what to build.
+        """Return the input script that tells ``tleap`` what to build.
+
+        ``tleap`` is driven by a small command language rather than by
+        arguments, so the whole build is expressed as a handful of lines: load
+        the parameters, load any residue definitions worked out for target
+        molecules, spell out each chain as a sequence of residue names, join
+        them into one molecule, and save it.
 
         Parameters
         ----------
         chains : sequence of maws.topology.ResidueChain
-            The chains to build, in order.
+            The chains to build, in order. A chain with no residues in it is
+            skipped, since ``tleap`` has no way to write an empty sequence.
         forcefield : maws.forcefield.ForceField
             Supplies the two lines that load the parameters.
         prmtop, inpcrd : pathlib.Path
-            Where ``tleap`` should write the parameters and the coordinates.
+            Where ``tleap`` should write the force field numbers and the
+            coordinates.
 
         Returns
         -------
         str
-            The script.
+            The script, as newline-separated lines.
         """
         lines = list(forcefield.leap_preamble())
         for name, directory in sorted(self._resources.items()):
@@ -608,6 +795,8 @@ class LeapBuilder:
             many problems by printing a complaint and carrying on, so a clean
             exit is not on its own evidence that anything was built.
         """
+        # tleap scatters intermediate files beside wherever it runs, so it runs
+        # in a directory that is thrown away rather than in the cache.
         with tempfile.TemporaryDirectory() as workdir:
             script = Path(workdir) / "build.in"
             script.write_text(self._leap_script(chains, forcefield, prmtop, inpcrd))
@@ -636,12 +825,14 @@ class LeapBuilder:
         forcefield : maws.forcefield.ForceField
             Which parameters it was built with.
         prmtop, inpcrd : pathlib.Path
-            The two files ``tleap`` wrote.
+            The two files ``tleap`` wrote: force field numbers and positions.
 
         Returns
         -------
         maws.topology.BuiltSystem
-            The structure, with coordinates in ångström.
+            The structure, with positions in ångström and masses in daltons.
+            Both files are kept on the result, so a later scoring step can hand
+            them to OpenMM without rebuilding anything.
         """
         from openmm import app, unit
 
@@ -676,12 +867,15 @@ class LeapBuilder:
         Returns
         -------
         str
-            A 40-character hexadecimal digest.
+            A 40-character hexadecimal digest, used as the filename stem for
+            the pair of files this build produces.
 
         Notes
         -----
         The digest covers the force field names, each chain's residue names in
         order, and the *contents* of every parameter file that will be loaded.
+        Anything that would change the structure changes the digest, and
+        anything that would not, does not.
 
         .. warning::
             Hashing parameter file paths instead of their contents is not
@@ -718,8 +912,14 @@ def _digest(path: Path) -> str:
     -------
     str
         A 40-character hexadecimal digest, or the empty string when the file
-        does not exist. A missing optional parameter file is normal, so its
-        absence is recorded rather than raised on.
+        does not exist. A ``.frcmod`` file is only written for a molecule whose
+        parameters had to be worked out, so its absence is ordinary and is
+        recorded rather than raised on.
+
+    Examples
+    --------
+    >>> _digest(Path("no-such-file"))
+    ''
     """
     if not path.exists():
         return ""

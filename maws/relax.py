@@ -4,15 +4,24 @@ maws.relax
 
 Shaking a structure loose from an awkward arrangement.
 
-Joining a new residue onto a strand leaves the atoms near the join in positions
-that are geometrically correct but physically strained: bonds at slightly wrong
-lengths, atoms slightly too close. Settling the structure fixes the worst of
-that by rolling downhill in energy, but downhill from a strained start can lead
-into a poor arrangement that is merely the nearest one, not a good one.
+Joining a new *residue* — a single nucleotide of the strand — onto an aptamer
+leaves the atoms near the join in positions that are geometrically correct but
+physically strained: bonds at slightly wrong lengths, atoms slightly too close.
+Settling the structure fixes the worst of that by rolling downhill in energy,
+but downhill from a strained start can lead into a poor arrangement that is
+merely the nearest one, not a good one.
 
 :func:`perturb_and_minimize` gets past that by nudging every atom a little at
 random and settling again, several times over. The nudges are small enough not
-to destroy the shape and large enough to escape a shallow dip.
+to destroy the shape and large enough to escape a shallow dip. It is the only
+thing in this module.
+
+Distances here are in ångström and energies in kJ/mol.
+
+See Also
+--------
+maws.energy.EnergyModel : Supplies both the score and the settling.
+maws.pose.Pose.jittered : Applies one round of nudges.
 
 Examples
 --------
@@ -49,16 +58,21 @@ def perturb_and_minimize(
     max_iterations: int = 100,
     rng: np.random.Generator | None = None,
 ) -> Relaxed:
-    """perturb_and_minimize(pose, energy, *, size=0.1, iterations=50) -> Relaxed
+    """perturb_and_minimize(pose, energy, *, size=0.1, iterations=50,
+                         max_iterations=100, rng=None) -> Relaxed
 
     Nudge every atom at random and settle the structure, repeatedly.
+
+    One round adds an independent random displacement to every atom and then
+    lets the energy model roll the whole structure downhill again. The rounds
+    run one after another, each starting from where the last one finished.
 
     Parameters
     ----------
     pose : maws.pose.Pose
-        The atom positions to start from.
+        The atom positions to work from.
     energy : maws.energy.EnergyModel
-        What scores and settles the structure.
+        What scores and settles the structure. Its energies are in kJ/mol.
     size : float, default=0.1
         How far each atom may be nudged along each axis, in ångström. Drawn
         evenly from ``-size`` to ``+size``. Larger values escape a poor
@@ -66,9 +80,11 @@ def perturb_and_minimize(
         a reasonable choice straight after a new residue has been joined on.
     iterations : int, default=50
         How many nudge-and-settle rounds to run. More rounds explore further at
-        a proportional cost.
+        a proportional cost. Zero does no nudging at all and simply reports the
+        energy of `pose` as it stands.
     max_iterations : int, default=100
-        How many adjustment steps each settling may take.
+        How many adjustment steps to allow before stopping, within each single
+        settling. Raising it settles each round more thoroughly and costs more.
     rng : numpy.random.Generator, optional
         Source of randomness. Pass one built with a fixed seed to make a run
         repeatable. Defaults to a fresh generator, so runs differ.
@@ -76,7 +92,8 @@ def perturb_and_minimize(
     Returns
     -------
     maws.energy.Relaxed
-        The positions after the final round, and their energy.
+        The positions after the final round, and their energy in kJ/mol. A new
+        pose; `pose` is unchanged.
 
     Raises
     ------
@@ -86,6 +103,7 @@ def perturb_and_minimize(
     See Also
     --------
     maws.energy.EnergyModel.minimize : One settling step on its own.
+    maws.pose.Pose.jittered : Applies the random displacements of one round.
 
     Notes
     -----

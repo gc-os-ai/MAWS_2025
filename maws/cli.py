@@ -4,31 +4,46 @@ maws.cli
 
 The ``maws`` command.
 
-Installing this package puts a ``maws`` command on your path with four
-subcommands:
+Installing this package puts a ``maws`` command on your path. It designs
+*aptamers*: short strands of RNA or DNA that fold up against another molecule —
+the *target* — and stick to it. The target is given as a PDB file, the standard
+text format for a molecular structure, listing one atom per line with its
+position.
+
+There are four subcommands:
 
 ``maws design``
-    The main one: design an aptamer against a target molecule.
+    The main one: design an aptamer against a target molecule. Prints the
+    strand it found, and writes a record of every candidate it scored plus the
+    structure from each step into the output directory.
 ``maws prepare``
-    Work out the parameters for a target molecule and stop there, writing the
-    files a later design run will reuse.
+    Work out the force-field parameters for a target molecule and stop there,
+    writing them into a directory of your choosing. A force field is the table
+    of numbers that turns a set of atom positions into an energy, and working
+    one out for a molecule that has none can take minutes.
 ``maws inspect``
     Say what a design run would do — how large the molecules are, which
     parameters would be used, how much work it would be — without doing any of
-    it.
+    it. Needs no molecular modelling software installed.
 ``maws clean``
-    Tidy a downloaded structure file into something the builder will accept.
+    Tidy a downloaded structure file into something the structure-assembly
+    program will accept, writing the tidied copy alongside the original.
 
-Settings can also be put in a file and passed with ``--config``, which saves
-typing a dozen flags. A flag given on the command line always wins over the
-file.
+Settings for ``maws design`` can also be put in a TOML file and passed with
+``--config``, which saves typing a dozen flags. A flag given on the command
+line always wins over the file.
+
+Every subcommand exits ``0`` on success, ``1`` if it reported a problem it
+understood, and ``2`` if the arguments were wrong.
 
 Examples
 --------
 .. code-block:: console
 
     $ maws design --target data/pfoa.pdb --length 20 --aptamer DNA --seed 42
+    $ maws design --target data/pfoa.pdb --length 3 --samples 50 --format json
     $ maws inspect --target data/pfoa.pdb --aptamer DNA
+    $ maws clean --target data/1hvr.pdb --drop-hetatm --keep-chains A
     $ maws design --config maws.toml --length 25
 """
 
@@ -61,17 +76,32 @@ appears in.
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``maws`` command.
 
+    Parses the arguments, sets up logging to standard error, and hands over to
+    the chosen subcommand. Anything the package itself raises is caught and
+    printed as one line; everything else is left to propagate, so a genuine bug
+    still shows its traceback.
+
     Parameters
     ----------
     argv : sequence of str, optional
-        The arguments, without the program name. Defaults to the ones the
-        command was invoked with.
+        The arguments, without the program name. Pass a list to drive the
+        command from Python. Defaults to the ones the command was invoked with.
 
     Returns
     -------
     int
         ``0`` if the command succeeded, ``1`` if it reported a problem, ``2``
-        if the arguments were wrong.
+        if the arguments were wrong. Suitable to pass straight to
+        :func:`sys.exit`.
+
+    See Also
+    --------
+    build_parser : Defines every subcommand and flag this dispatches on.
+
+    Notes
+    -----
+    ``--version`` and ``--help`` are handled by :mod:`argparse`, which prints
+    and raises :exc:`SystemExit` rather than returning.
 
     Examples
     --------
@@ -97,7 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
     -------
     argparse.ArgumentParser
         A parser whose ``handler`` attribute, once arguments are parsed, is the
-        function that carries out the chosen subcommand.
+        function that carries out the chosen subcommand. Choosing a subcommand
+        is required; calling with none is an argument error.
+
+    See Also
+    --------
+    main : Parses with this and calls the handler it selects.
 
     Examples
     --------
@@ -105,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     >>> args = parser.parse_args(["design", "--target", "t.pdb", "--length", "4"])
     >>> args.target, args.length
     ('t.pdb', 4)
+
+    Every flag left off takes its default:
+
+    >>> args.samples, args.aptamer, args.sampling
+    (5000, 'RNA', 'sphere')
     """
     from maws import __version__
 
@@ -127,10 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_verbosity(parser: argparse.ArgumentParser) -> None:
     """Add the mutually exclusive ``-v``/``-q`` flags to a subcommand.
 
+    Every subcommand takes the same pair, so they are defined once here.
+
     Parameters
     ----------
     parser : argparse.ArgumentParser
-        The subcommand's parser.
+        The subcommand's parser, which the flags are added to in place.
     """
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -145,12 +187,15 @@ def _add_verbosity(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_design(subcommands: Any) -> None:
-    """Add the ``design`` subcommand.
+    """Add the ``design`` subcommand, which runs a whole design.
+
+    Its flags mirror the arguments of :func:`maws.api.design`, grouped so that
+    ``--help`` reads in sections rather than as one long list.
 
     Parameters
     ----------
     subcommands : argparse._SubParsersAction
-        Where to add it.
+        Where to add it, as returned by ``add_subparsers``.
     """
     parser = subcommands.add_parser(
         "design",
@@ -266,8 +311,9 @@ def _add_design(subcommands: Any) -> None:
         "--config", metavar="FILE", help="read settings from a TOML file"
     )
     _add_verbosity(parser)
-    # Kept so resolve_settings can tell an option that was typed from one that
-    # was left alone: only the latter may be overridden by a config file.
+    # Every default is recorded so that resolve_settings can tell an option
+    # that was typed from one that was left alone: only the latter may be
+    # overridden by a config file.
     parser.set_defaults(
         handler=_run_design,
         design_defaults={
@@ -278,12 +324,12 @@ def _add_design(subcommands: Any) -> None:
 
 
 def _add_prepare(subcommands: Any) -> None:
-    """Add the ``prepare`` subcommand.
+    """Add the ``prepare`` subcommand, which only fits target parameters.
 
     Parameters
     ----------
     subcommands : argparse._SubParsersAction
-        Where to add it.
+        Where to add it, as returned by ``add_subparsers``.
     """
     parser = subcommands.add_parser(
         "prepare",
@@ -311,12 +357,12 @@ def _add_prepare(subcommands: Any) -> None:
 
 
 def _add_inspect(subcommands: Any) -> None:
-    """Add the ``inspect`` subcommand.
+    """Add the ``inspect`` subcommand, which describes a run without doing it.
 
     Parameters
     ----------
     subcommands : argparse._SubParsersAction
-        Where to add it.
+        Where to add it, as returned by ``add_subparsers``.
     """
     parser = subcommands.add_parser(
         "inspect",
@@ -347,12 +393,12 @@ def _add_inspect(subcommands: Any) -> None:
 
 
 def _add_clean(subcommands: Any) -> None:
-    """Add the ``clean`` subcommand.
+    """Add the ``clean`` subcommand, which tidies a structure file.
 
     Parameters
     ----------
     subcommands : argparse._SubParsersAction
-        Where to add it.
+        Where to add it, as returned by ``add_subparsers``.
     """
     parser = subcommands.add_parser(
         "clean",
@@ -376,12 +422,12 @@ def _add_clean(subcommands: Any) -> None:
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
-    """Read settings from a TOML file and flatten them into one mapping.
+    r"""Read settings from a TOML file and flatten them into one mapping.
 
     Parameters
     ----------
     path : str or pathlib.Path
-        The file to read.
+        The file to read. Every setting in it names a flag of ``maws design``.
 
     Returns
     -------
@@ -394,10 +440,26 @@ def load_config(path: str | Path) -> dict[str, Any]:
     maws.errors.ConfigurationError
         If the file cannot be read or is not valid TOML.
 
+    See Also
+    --------
+    resolve_settings : Decides which of these values actually take effect.
+
     Notes
     -----
     Only the sections named in :data:`CONFIG_SECTIONS` are read. Anything else
-    is ignored, so a file may carry notes or settings for other tools.
+    is ignored, so a file may carry notes or settings for other tools. Which of
+    those sections a setting appears in makes no difference.
+
+    Examples
+    --------
+    >>> import pathlib, tempfile
+    >>> with tempfile.TemporaryDirectory() as directory:
+    ...     path = pathlib.Path(directory) / "maws.toml"
+    ...     _ = path.write_text(
+    ...         "[design]\nlength = 25\n\n[sampling]\nfirst-samples = 100\n"
+    ...     )
+    ...     load_config(path)
+    {'length': 25, 'first_samples': 100}
     """
     from maws.errors import ConfigurationError
 
@@ -424,23 +486,38 @@ def resolve_settings(
     Parameters
     ----------
     args : argparse.Namespace
-        What was parsed from the command line.
+        What was parsed from the command line. Its ``config`` entry, if set,
+        names the file to read.
     parser_defaults : dict
-        The value each option takes when it is not given.
+        The value each option takes when it is not given. Needed to tell a flag
+        that was typed from one that was left alone.
 
     Returns
     -------
     dict
-        The settled values.
+        The settled values, one entry per option, ready to be passed to
+        :func:`maws.api.design`.
+
+    Raises
+    ------
+    maws.errors.ConfigurationError
+        If a config file was named and cannot be read.
+
+    See Also
+    --------
+    load_config : Reads the file whose values are merged in here.
 
     Notes
     -----
     A flag typed on the command line wins over the config file, which in turn
-    wins over the defaults. A flag is taken to have been typed when its value
-    differs from the default, which is why the defaults have to be passed in.
+    wins over the defaults. A flag counts as typed when its value differs from
+    its default, so typing a flag with exactly its default value leaves the
+    config file free to override it.
 
     Examples
     --------
+    With no config file, the parsed values pass straight through:
+
     >>> import argparse
     >>> args = argparse.Namespace(length=15, config=None)
     >>> resolve_settings(args, {"length": 15})["length"]
@@ -463,12 +540,15 @@ def _log_level(args: argparse.Namespace) -> int:
     Parameters
     ----------
     args : argparse.Namespace
-        Parsed arguments, which may carry ``verbose`` and ``quiet``.
+        Parsed arguments, which may carry ``verbose`` and ``quiet``. Neither is
+        required to be present, so this also works before a subcommand has been
+        chosen.
 
     Returns
     -------
     int
-        A level from :mod:`logging`.
+        A level from :mod:`logging`: ``ERROR`` for ``-q``, ``DEBUG`` for
+        ``-v``, ``INFO`` otherwise.
     """
     if getattr(args, "quiet", False):
         return logging.ERROR
@@ -483,12 +563,18 @@ def _run_design(args: argparse.Namespace) -> int:
     Parameters
     ----------
     args : argparse.Namespace
-        Parsed arguments.
+        Parsed arguments, merged with any config file before use.
 
     Returns
     -------
     int
-        ``0`` on success, ``2`` if no target was given.
+        ``0`` on success, ``1`` if the run stopped before reaching the
+        requested length, ``2`` if no target was given.
+
+    Notes
+    -----
+    ``--target`` is checked here rather than marked required by the parser, so
+    that a config file is allowed to supply it.
     """
     import json
 
@@ -559,6 +645,13 @@ def _run_prepare(args: argparse.Namespace) -> int:
     -------
     int
         ``0`` on success.
+
+    Notes
+    -----
+    Writes into the directory given by ``-o``, and prints the residue library
+    file it produced. A design run reads its parameters from the directory its
+    own builder was given, so the two only meet when both are pointed at the
+    same place.
     """
     from maws.build import LeapBuilder
     from maws.forcefield import ForceField
@@ -597,7 +690,12 @@ def _run_inspect(args: argparse.Namespace) -> int:
     Notes
     -----
     Counts the target's atoms by reading its file directly rather than by
-    building anything, so this works without AmberTools installed.
+    building anything, so this works without AmberTools — the molecular
+    modelling suite a real run assembles structures with — being installed.
+
+    The estimated work is ``8 * samples`` energy evaluations for every growth
+    step after the first, plus ``4 * samples`` for the first, where only the
+    four single nucleotides are on offer.
     """
     from maws.build import FakeBuilder
     from maws.forcefield import ForceField
@@ -652,6 +750,12 @@ def _run_clean(args: argparse.Namespace) -> int:
     -------
     int
         ``0`` on success.
+
+    Notes
+    -----
+    The original file is never modified: a tidied copy is written next to it,
+    and the copy's path is printed. If the tidying cannot be done, the original
+    is reported as unchanged and a warning explains why.
     """
     from maws.io.pdb_cleaner import resolve_pdb_path
 
