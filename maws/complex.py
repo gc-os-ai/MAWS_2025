@@ -1264,6 +1264,7 @@ class Complex:
         size: float = 1e-1,
         iterations: int = 50,
         atoms: Sequence[int] | None = None,
+        rng: int | np.random.Generator | None = None,
     ) -> None:
         """
         Chain-wriggling heuristic: apply small random kicks, then minimize.
@@ -1279,6 +1280,9 @@ class Complex:
             are neither kicked nor relaxed: their masses are set to zero for the
             duration of the call, which pins them during minimization. ``None``
             lets the **whole** complex move.
+        rng : int or numpy.random.Generator, optional
+            Source of randomness for the kicks. Pass a seed to make a run
+            repeatable. Defaults to a fresh generator, so runs differ.
 
         Raises
         ------
@@ -1309,12 +1313,13 @@ class Complex:
                 )
             immobile = sorted(set(range(n_atoms)).difference(mobile))
 
+        generator = np.random.default_rng(rng)
         saved_masses = self._freeze_particles(immobile)
         try:
             for _repeat in range(iterations):
                 for i in mobile:
                     self.positions[i] += (
-                        np.random.uniform(-size, size, 3) * unit.angstrom
+                        generator.uniform(-size, size, 3) * unit.angstrom
                     )
                 self.minimize()
         finally:

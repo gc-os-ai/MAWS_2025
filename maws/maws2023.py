@@ -10,6 +10,7 @@ import copy
 import logging
 from datetime import datetime
 
+import numpy as np
 from openmm import app
 
 import maws.space as space
@@ -129,6 +130,16 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for every random draw, making the run repeatable. "
+            "Default: a fresh seed each run, reported in the log so the run "
+            "can still be repeated afterwards."
+        ),
+    )
+    parser.add_argument(
         "--salt-conc",
         type=_non_negative_float,
         default=0.15,
@@ -154,6 +165,11 @@ def main():
     APTAMER_TYPE = args.aptamertype
     MOLECULE_TYPE = args.moleculetype
     N_ELEMENTS = 4  # rotatable backbone torsions per residue
+
+    # A run with no --seed still gets one, so its result can be reproduced
+    # from the log afterwards.
+    seed = np.random.SeedSequence().entropy if args.seed is None else args.seed
+    rng = np.random.default_rng(seed)
 
     # ---------------- Logging configuration ----------------
     logger = logging.getLogger("maws")
@@ -207,6 +223,7 @@ def main():
         )
         logger.info("Value of beta: %s", BETA)
         logger.info("Salt concentration (GB screening, mol/L): %s", args.salt_conc)
+        logger.info("Random seed: %s", seed)
         logger.info("Start time: %s", datetime.now())
 
         # Choose aptamer FF and residue
@@ -266,8 +283,8 @@ def main():
         c.build()
 
         # Surface-aware sampler around the ligand (auto-sized envelope + SAS rejection)
-        sampler = space.make_sampler(c, reach=args.reach, probe=args.probe)
-        rotations = space.NAngles(N_ELEMENTS)
+        sampler = space.make_sampler(c, reach=args.reach, probe=args.probe, rng=rng)
+        rotations = space.NAngles(N_ELEMENTS, rng=rng)
 
         # Tracking best candidate
         best_entropy = None
@@ -382,6 +399,7 @@ def main():
                     cx.pert_min(
                         size=0.5,
                         atoms=range(aptamer.element[0], aptamer.element[2]),
+                        rng=rng,
                     )
 
                     positions0 = cx.positions[:]

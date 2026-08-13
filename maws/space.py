@@ -23,16 +23,26 @@ NAngles : frozen dataclass
 Excluder
     KDTree-backed SAS rejection: a candidate is "clear" iff its distance
     to every ligand atom exceeds (Bondi vdW + probe).
+ClashFilter
+    Rejects a placed strand whose atoms overlap the docking target.
 SurfaceSampler
     Composes an envelope + an Excluder into a rejection sampler.
 SurfaceFollowingSampler
     Alternative sampler that concentrates poses near the molecular
     surface via an outer distance cap.
-make_sampler(complex_obj, *, mode="sphere", reach=10.0, d_max=6.0, probe=1.4)
+make_sampler(complex_obj, *, mode="sphere", reach=10.0, d_max=6.0, probe=1.4, rng=None)
     Factory: builds the requested sampler for the given Complex.
+draw_clear_conformation(complex_obj, chain, sampler, rotations, clash)
+    Draws poses and torsions until one sits clear of the target.
 compute_envelope_dims(complex_obj, reach)
     Returns the kwargs for the Sphere dataclass; useful in tests and
     notebooks.
+
+Reproducibility
+---------------
+Every random draw here comes from a :class:`numpy.random.Generator` given as
+``rng``. Pass a seed to repeat a run. Leave it out and each sampler builds
+its own generator, so runs differ.
 
 
 Examples
@@ -44,7 +54,7 @@ Examples
 """
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from typing import Literal, Protocol
 
 import numpy as np
@@ -96,7 +106,7 @@ class Sample:
     angle: float  # radians
 
 
-def _random_unit_axis() -> np.ndarray:
+def _random_unit_axis(rng: np.random.Generator) -> np.ndarray:
     """Random unit vector uniformly distributed on the unit sphere.
 
     Uses the standard Gaussian-then-normalize recipe: the multivariate
@@ -106,7 +116,7 @@ def _random_unit_axis() -> np.ndarray:
     over-represent the cube's corner-aligned directions because the
     cube has greater radial extent along its diagonals than its faces.
     """
-    v = np.random.standard_normal(3)
+    v = rng.standard_normal(3)
     return v / np.linalg.norm(v)
 
 
@@ -121,11 +131,13 @@ class Envelope(Protocol):
     def generator(self) -> Sample: ...
 
 
-def _spherical_sample(centre: np.ndarray, r: float) -> np.ndarray:
+def _spherical_sample(
+    centre: np.ndarray, r: float, rng: np.random.Generator
+) -> np.ndarray:
     """Random point on a sphere of radius ``r`` around ``centre``
     (uniform direction)."""
-    phi = np.random.uniform(0, 2 * np.pi)
-    cos_psi = np.random.uniform(-1, 1)  # uniform on the sphere
+    phi = rng.uniform(0, 2 * np.pi)
+    cos_psi = rng.uniform(-1, 1)  # uniform on the sphere
     sin_psi = np.sqrt(1.0 - cos_psi * cos_psi)
     return np.array(
         [
@@ -160,29 +172,58 @@ class Sphere:
 
     The final position is ``centre + r · direction``. ``axis`` is an
     independent random unit vector; ``angle`` is ``U(0, 2π)``.
+
+    Parameters
+    ----------
+    radius : float
+        How far the sphere reaches from `centre`, in ångström.
+    centre : numpy.ndarray
+        Shape ``(3,)`` point the sphere is built around, in ångström.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
     """
 
     radius: float
     centre: np.ndarray
+    rng: InitVar[int | np.random.Generator | None] = None
+    _rng: np.random.Generator = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self, rng):
+        object.__setattr__(self, "_rng", np.random.default_rng(rng))
 
     def generator(self) -> Sample:
         # Volume-correct: r = R · u^(1/3) for u ~ U(0,1).
-        r = self.radius * np.random.uniform(0, 1) ** (1 / 3)
+        r = self.radius * self._rng.uniform(0, 1) ** (1 / 3)
         return Sample(
-            position=_spherical_sample(self.centre, r),
-            axis=_random_unit_axis(),
-            angle=float(np.random.uniform(0, 2 * np.pi)),
+            position=_spherical_sample(self.centre, r, self._rng),
+            axis=_random_unit_axis(self._rng),
+            angle=float(self._rng.uniform(0, 2 * np.pi)),
         )
 
 
 @dataclass(frozen=True)
 class NAngles:
-    """N independent angles drawn from [0, 2π). Used for in-residue rotations."""
+    """N independent angles drawn from [0, 2π). Used for in-residue rotations.
+
+    Parameters
+    ----------
+    n : int
+        How many angles each draw returns, one per rotatable bond.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
+    """
 
     n: int
+    rng: InitVar[int | np.random.Generator | None] = None
+    _rng: np.random.Generator = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self, rng):
+        object.__setattr__(self, "_rng", np.random.default_rng(rng))
 
     def generator(self) -> np.ndarray:
-        return np.random.uniform(0, 2 * np.pi, self.n)
+        return self._rng.uniform(0, 2 * np.pi, self.n)
 
 
 _WARNED_ELEMENTS: set[str] = set()
@@ -310,9 +351,9 @@ class ClashFilter:
 
         ``dist(i, j) < vdW(i) + vdW(j) - tolerance``
 
-    Pairs within the strand are not tested. A torsion cannot pull the strand
-    through itself, and the force field already resists a self-overlap; the
-    thing being rejected here is a strand pushed into the target.
+    Only strand-target pairs are tested. A torsion swings a rigid group about
+    a bond, so the strand keeps its own internal geometry, and the force field
+    already resists what little self-overlap a torsion can create.
 
     Radii come from the Bondi (1964) table at the top of this module.
 
@@ -613,6 +654,9 @@ class SurfaceFollowingSampler:
         :class:`SamplingError` is raised. The cap is higher than
         :class:`SurfaceSampler`'s because the band's rejection rate is
         higher.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
     """
 
     def __init__(
@@ -622,9 +666,11 @@ class SurfaceFollowingSampler:
         d_max: float = 6.0,
         probe: float = 1.4,
         max_rejections: int = 50_000,
+        rng: int | np.random.Generator | None = None,
     ):
         if d_max <= 0:
             raise ValueError(f"d_max must be > 0, got {d_max}")
+        self._rng = np.random.default_rng(rng)
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
         com = mass_weighted_center(positions, atom_masses(complex_obj.topology))
         R_max = float(np.linalg.norm(positions - com, axis=1).max())
@@ -638,9 +684,9 @@ class SurfaceFollowingSampler:
     def generator(self) -> Sample:
         for _ in range(self._max_rejections):
             # Uniform-in-volume draw inside the bounding sphere.
-            r = self._R_bound * np.random.uniform(0, 1) ** (1 / 3)
-            phi = np.random.uniform(0, 2 * np.pi)
-            cos_psi = np.random.uniform(-1, 1)
+            r = self._R_bound * self._rng.uniform(0, 1) ** (1 / 3)
+            phi = self._rng.uniform(0, 2 * np.pi)
+            cos_psi = self._rng.uniform(-1, 1)
             sin_psi = np.sqrt(1.0 - cos_psi * cos_psi)
             position = self._com + r * np.array(
                 [np.cos(phi) * sin_psi, np.sin(phi) * sin_psi, cos_psi]
@@ -652,8 +698,8 @@ class SurfaceFollowingSampler:
                 continue  # inside protein bulk
             return Sample(
                 position=position,
-                axis=_random_unit_axis(),
-                angle=float(np.random.uniform(0, 2 * np.pi)),
+                axis=_random_unit_axis(self._rng),
+                angle=float(self._rng.uniform(0, 2 * np.pi)),
             )
         raise SamplingError(
             f"Could not draw a surface-following sample in "
@@ -669,6 +715,7 @@ def make_sampler(
     reach: float = 10.0,
     d_max: float = 6.0,
     probe: float = 1.4,
+    rng: int | np.random.Generator | None = None,
 ):
     """
     Build a fully-configured surface-aware sampler for ``complex_obj``.
@@ -703,6 +750,9 @@ def make_sampler(
     probe : float, default 1.4
         Probe radius for the SAS rejection (Å), water-equivalent by
         default. Must be ``>= 0``. Used by both modes.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
 
     Returns
     -------
@@ -727,11 +777,11 @@ def make_sampler(
         if reach < 0:
             raise ValueError(f"reach must be >= 0, got {reach}")
         dims = compute_envelope_dims(complex_obj, reach)
-        envelope = Sphere(**dims)
+        envelope = Sphere(**dims, rng=rng)
         excluder = Excluder(complex_obj, probe=probe)
         return SurfaceSampler(envelope=envelope, excluder=excluder)
     if mode == "surface-following":
-        return SurfaceFollowingSampler(complex_obj, d_max=d_max, probe=probe)
+        return SurfaceFollowingSampler(complex_obj, d_max=d_max, probe=probe, rng=rng)
     raise ValueError(
         f"Unknown mode {mode!r}; expected one of 'sphere', 'surface-following'."
     )

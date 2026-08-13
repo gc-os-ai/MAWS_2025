@@ -129,9 +129,9 @@ class TestRandomUnitAxis:
     def test_axes_are_unit_length(self):
         from maws.space import _random_unit_axis
 
-        np.random.seed(0)
+        rng = np.random.default_rng(0)
         for _ in range(50):
-            axis = _random_unit_axis()
+            axis = _random_unit_axis(rng)
             assert abs(np.linalg.norm(axis) - 1.0) < 1e-9
 
     def test_isotropic_face_vs_corner_directions(self):
@@ -153,9 +153,9 @@ class TestRandomUnitAxis:
         """
         from maws.space import _random_unit_axis
 
-        np.random.seed(0)
+        rng = np.random.default_rng(0)
         n = 50_000
-        axes = np.abs(np.array([_random_unit_axis() for _ in range(n)]))
+        axes = np.abs(np.array([_random_unit_axis(rng) for _ in range(n)]))
         max_per_axis = axes.max(axis=1)
         min_per_axis = axes.min(axis=1)
         face_fraction = float((max_per_axis > 0.85).mean())
