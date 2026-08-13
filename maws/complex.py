@@ -703,19 +703,33 @@ class Complex:
         angle : float
             Rotation angle in **radians**.
         reverse : bool, default=False
-            Passed through to :meth:`rotate_global` to rotate the complementary
-            segment when applicable.
+            Rotate the fragment **upstream** of the bond - the range
+            ``[end, bond)`` - instead of the downstream ``[bond, end)``.
+            Either way the axis passes through the bond atom, so both bonded
+            atoms stay put.
 
         Raises
         ------
         ValueError
-            If :attr:`positions` is not initialized.
+            If :attr:`positions` is not initialized, or if the element does
+            not describe a non-empty range in the requested direction.
         """
 
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
         pos = self.positions[:]
         start, bond, end = element
+
+        # Reject a triple that describes an empty or backwards range rather
+        # than silently rotating nothing. Getting this wrong used to be
+        # reinterpreted as a different rotation entirely (issue #47, A7).
+        lo, hi = (end, bond) if reverse else (bond, end)
+        if hi <= lo:
+            direction = "reverse" if reverse else "forward"
+            raise ValueError(
+                f"Rotable element {list(element)} describes an empty "
+                f"{direction} range [{lo}:{hi}); expected end > start."
+            )
 
         # The axis is the bond itself, whichever fragment we end up turning.
         vec_a = pos[bond] - pos[start]
@@ -919,49 +933,6 @@ class Complex:
         self.positions = state.getPositions()
         free_E = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         return free_E, self.positions
-
-    def rigid_minimize(
-        self, max_iterations: int = 100, max_step_iterations: int = 100
-    ) -> None:
-        """
-        Experimental search: random residue torsions followed by local minimization.
-
-        Parameters
-        ----------
-        max_iterations : int, default=100
-            Outer loop iterations over residues.
-        max_step_iterations : int, default=100
-            Random torsion proposals per residue before accepting an improvement.
-
-        Notes
-        -----
-        For each residue, propose random torsions; if a proposal improves the
-        energy, keep it, otherwise revert the coordinates. This is a greedy
-        heuristic and not guaranteed to converge to a global minimum.
-        """
-        energy = None
-        for _i in range(max_iterations):
-            for chain in self.chains:
-                for idx, residue in enumerate(chain.sequence_array):
-                    for _j in range(max_step_iterations):
-                        positions = self.positions[:]
-                        rots = chain.structure.rotating_elements[residue]
-                        if rots == [None]:  # skip residues with no torsions
-                            continue
-                        n_rots = len(rots)
-
-                        chain.rotate_in_residue(
-                            idx,
-                            int(
-                                np.random.randint(n_rots)
-                            ),  # or: np.random.choice(n_rots)
-                            np.random.uniform(-np.pi, np.pi),
-                        )
-
-                        free_E = self.get_energy()[0]
-                        if free_E < energy or energy is None:
-                            energy = free_E
-                            self.positions = positions[:]
 
     def _freeze_particles(self, indices: Sequence[int]) -> dict[int, Quantity]:
         """

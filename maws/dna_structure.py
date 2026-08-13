@@ -72,22 +72,22 @@ ROTATIONS: list[tuple[str, int, int, int | None]] = [
     ("DGN", 0, 1, None),
     ("DGN", 1, 2, None),
     ("DGN", 8, 10, -7),
-    ("DGN", -4, -2, None),
+    ("DGN", -7, -2, None),
     # DAN
     ("DAN", 0, 1, None),
     ("DAN", 1, 2, None),
     ("DAN", 8, 10, -7),
-    ("DAN", -4, -2, None),
+    ("DAN", -7, -2, None),
     # DTN
     ("DTN", 0, 1, None),
     ("DTN", 1, 2, None),
     ("DTN", 8, 10, -7),
-    ("DTN", -4, -2, None),
+    ("DTN", -7, -2, None),
     # DCN
     ("DCN", 0, 1, None),
     ("DCN", 1, 2, None),
     ("DCN", 8, 10, -7),
-    ("DCN", -4, -2, None),
+    ("DCN", -7, -2, None),
     # DG
     ("DG", 0, 3, None),
     ("DG", 3, 4, None),
@@ -132,22 +132,22 @@ ROTATIONS: list[tuple[str, int, int, int | None]] = [
     ("DG3", 0, 3, None),
     ("DG3", 3, 4, None),
     ("DG3", 10, 12, -7),
-    ("DG3", -4, -2, None),
+    ("DG3", -7, -2, None),
     # DA3
     ("DA3", 0, 3, None),
     ("DA3", 3, 4, None),
     ("DA3", 10, 12, -7),
-    ("DA3", -4, -2, None),
+    ("DA3", -7, -2, None),
     # DT3
     ("DT3", 0, 3, None),
     ("DT3", 3, 4, None),
     ("DT3", 10, 12, -7),
-    ("DT3", -4, -2, None),
+    ("DT3", -7, -2, None),
     # DC3
     ("DC3", 0, 3, None),
     ("DC3", 3, 4, None),
     ("DC3", 10, 12, -7),
-    ("DC3", -4, -2, None),
+    ("DC3", -7, -2, None),
 ]
 
 # 5) Connectivity: per residue:
