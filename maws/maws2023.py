@@ -115,12 +115,13 @@ def parse_args():
     parser.add_argument(
         "--sampler-mode",
         type=str,
-        default="sphere",
+        default="surface-following",
         choices=["sphere", "surface-following"],
         help=(
-            "Shape of the region poses are drawn from. 'sphere' fills a ball "
-            "around the target; 'surface-following' keeps poses within "
-            "--d-max of the surface. Default: sphere."
+            "Shape of the region poses are drawn from. 'surface-following' "
+            "keeps poses within --d-max of the target's surface; 'sphere' "
+            "fills a ball around the target, most of which is open solvent. "
+            "Default: surface-following."
         ),
     )
     parser.add_argument(

@@ -562,7 +562,9 @@ class TestMakeSampler:
     ):
         from maws.space import Sphere, SurfaceSampler, make_sampler
 
-        s = make_sampler(synthetic_octahedron_complex, reach=10.0, probe=1.4)
+        s = make_sampler(
+            synthetic_octahedron_complex, mode="sphere", reach=10.0, probe=1.4
+        )
         assert isinstance(s, SurfaceSampler)
         assert isinstance(s.envelope, Sphere)
 
@@ -570,14 +572,13 @@ class TestMakeSampler:
         """For the octahedron with reach=10, sphere radius should be 15."""
         from maws.space import make_sampler
 
-        s = make_sampler(synthetic_octahedron_complex, reach=10.0)
+        s = make_sampler(synthetic_octahedron_complex, mode="sphere", reach=10.0)
         assert s.envelope.radius == 15.0
 
     def test_returns_clear_samples(self, synthetic_octahedron_complex):
         from maws.space import make_sampler
 
-        np.random.seed(0)
-        s = make_sampler(synthetic_octahedron_complex)
+        s = make_sampler(synthetic_octahedron_complex, mode="sphere", rng=0)
         for _ in range(20):
             sample = s.generator()
             assert s.excluder.is_clear(sample.position)
@@ -640,11 +641,18 @@ class TestSurfaceFollowingSampler:
 
 
 class TestMakeSamplerModes:
-    def test_default_is_sphere(self, synthetic_octahedron_complex):
-        from maws.space import SurfaceSampler, make_sampler
+    def test_default_is_surface_following(self, synthetic_octahedron_complex):
+        """The default keeps poses against the target's surface.
+
+        A bounding sphere spends most of its volume on open solvent at every
+        target size: measured on serotonin, cortisol and a 1408-atom protein,
+        85.6%, 87.0% and 87.7% of sphere-mode poses land more than 6 A from
+        the nearest atom, where a strand touches nothing.
+        """
+        from maws.space import SurfaceFollowingSampler, make_sampler
 
         s = make_sampler(synthetic_octahedron_complex)
-        assert isinstance(s, SurfaceSampler)
+        assert isinstance(s, SurfaceFollowingSampler)
 
     def test_explicit_sphere_mode(self, synthetic_octahedron_complex):
         from maws.space import SurfaceSampler, make_sampler
@@ -696,6 +704,7 @@ class TestMakeSamplerModes:
         centre = np.array([30.0, 0.0, 0.0])
         sampler = make_sampler(
             synthetic_octahedron_complex,
+            mode="sphere",
             site_centre=centre,
             site_radius=4.0,
             rng=0,
@@ -713,7 +722,7 @@ class TestMakeSamplerModes:
         """
         from maws.space import make_sampler
 
-        sampler = make_sampler(synthetic_octahedron_complex, rng=0)
+        sampler = make_sampler(synthetic_octahedron_complex, mode="sphere", rng=0)
         assert sampler.envelope.radius == 15.0
         assert np.allclose(sampler.envelope.centre, [0.0, 0.0, 0.0])
 
@@ -748,18 +757,30 @@ class TestMakeSamplerModes:
         with pytest.raises(ValueError, match="three"):
             make_sampler(synthetic_octahedron_complex, site_centre=[1.0, 2.0])
 
-    def test_a_site_centre_needs_sphere_mode(self, synthetic_octahedron_complex):
-        """Surface-following covers the whole surface, so a site would be ignored."""
-        import pytest
+    def test_a_site_centre_also_aims_surface_following(
+        self, synthetic_octahedron_complex
+    ):
+        """A site narrows surface-following too, keeping both constraints.
 
+        Aiming at a site and hugging the surface are separate questions, so
+        asking for both gives poses that are near the site *and* against the
+        target: the most focused search available.
+        """
         from maws.space import make_sampler
 
-        with pytest.raises(ValueError, match="site_centre"):
-            make_sampler(
-                synthetic_octahedron_complex,
-                mode="surface-following",
-                site_centre=np.zeros(3),
-            )
+        # The fixture's atoms sit 5 A out along each axis. Aim at the +x atom.
+        centre = np.array([5.0, 0.0, 0.0])
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            mode="surface-following",
+            site_centre=centre,
+            site_radius=8.0,
+            d_max=6.0,
+            rng=0,
+        )
+        for _ in range(20):
+            pos = sampler.generator().position
+            assert np.linalg.norm(pos - centre) <= 8.0
 
     def test_both_modes_yield_clear_samples(self, synthetic_octahedron_complex):
         from maws.space import Excluder, make_sampler

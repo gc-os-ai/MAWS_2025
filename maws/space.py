@@ -8,11 +8,12 @@ The single entry point is :func:`make_sampler`. It returns a sampler
 whose ``.generator()`` yields candidate poses (:class:`Sample`) that
 survive the configured filters. Two modes are available:
 
-- ``mode="sphere"`` (default): bounding-sphere envelope + SAS rejection.
-  Simple, fast, well-tested. Returns a :class:`SurfaceSampler`.
-- ``mode="surface-following"`` (opt-in): also caps how far a candidate
-  may sit from the nearest protein atom, so accepted samples concentrate
-  near the molecular surface. Returns a :class:`SurfaceFollowingSampler`.
+- ``mode="surface-following"`` (default): caps how far a candidate may sit
+  from the nearest target atom, so accepted samples form a band over the
+  molecular surface. Returns a :class:`SurfaceFollowingSampler`.
+- ``mode="sphere"``: bounding-sphere envelope + SAS rejection. Cheaper per
+  draw, at the cost of spending most draws on open solvent well clear of the
+  target. Returns a :class:`SurfaceSampler`.
 
 Public API
 ----------
@@ -30,7 +31,7 @@ SurfaceSampler
 SurfaceFollowingSampler
     Alternative sampler that concentrates poses near the molecular
     surface via an outer distance cap.
-make_sampler(complex_obj, *, mode="sphere", reach=10.0, d_max=6.0, probe=1.4, rng=None)
+make_sampler(complex_obj, *, mode="surface-following", d_max=6.0, probe=1.4, rng=None)
     Factory: builds the requested sampler for the given Complex.
 draw_clear_conformation(complex_obj, chain, sampler, rotations, clash)
     Draws poses and torsions until one sits clear of the target.
@@ -655,6 +656,12 @@ class SurfaceFollowingSampler:
         :class:`SamplingError` is raised. The cap is higher than
         :class:`SurfaceSampler`'s because the band's rejection rate is
         higher.
+    centre : array-like, optional
+        Shape ``(3,)`` point in ångström to search around, narrowing the band
+        to one site. Defaults to the whole surface.
+    radius : float, optional
+        How far the search reaches from `centre`, in ångström. Required
+        alongside `centre`.
     rng : int or numpy.random.Generator, optional
         Source of randomness. Pass a seed to make a run repeatable.
         Defaults to a fresh generator, so runs differ.
@@ -667,16 +674,25 @@ class SurfaceFollowingSampler:
         d_max: float = 6.0,
         probe: float = 1.4,
         max_rejections: int = 50_000,
+        centre=None,
+        radius: float | None = None,
         rng: int | np.random.Generator | None = None,
     ):
         if d_max <= 0:
             raise ValueError(f"d_max must be > 0, got {d_max}")
         self._rng = np.random.default_rng(rng)
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
-        com = mass_weighted_center(positions, atom_masses(complex_obj.topology))
-        R_max = float(np.linalg.norm(positions - com, axis=1).max())
-        self._com = com
-        self._R_bound = R_max + d_max
+
+        if centre is None:
+            com = mass_weighted_center(positions, atom_masses(complex_obj.topology))
+            R_max = float(np.linalg.norm(positions - com, axis=1).max())
+            self._com = com
+            self._R_bound = R_max + d_max
+        else:
+            if radius is None:
+                raise ValueError("centre needs a radius to go with it.")
+            self._com = np.asarray(centre, dtype=float)
+            self._R_bound = float(radius)
         self._tree = KDTree(positions)
         self._excluder = Excluder(complex_obj, probe=probe)
         self._d_max = d_max
@@ -712,7 +728,7 @@ class SurfaceFollowingSampler:
 def make_sampler(
     complex_obj,
     *,
-    mode: Literal["sphere", "surface-following"] = "sphere",
+    mode: Literal["sphere", "surface-following"] = "surface-following",
     reach: float = 10.0,
     d_max: float = 6.0,
     probe: float = 1.4,
@@ -728,51 +744,54 @@ def make_sampler(
     solvent-accessible surface, so both return points that sit in solvent.
     They differ in how far out into that solvent a point may sit.
 
-    - ``mode="sphere"`` (default): the sphere is centred on the target's
-      centre of mass with a radius of ``furthest atom + reach``, and every
-      point outside the surface is kept. On a protein most of that volume
-      is open solvent well clear of the target. Measured on a 2760-atom
-      target with the shipped defaults: the sphere has a radius of 39 Å,
-      half the accepted points sit more than 12 Å from the nearest target
-      atom, and the furthest sits 25 Å out. A strand placed there floats
-      free of the target. Returns a :class:`SurfaceSampler`.
+    - ``mode="surface-following"`` (default): a point is kept only while some
+      target atom lies within ``d_max`` of it, so accepted points form a band
+      over the surface that dips into pockets and wraps around protrusions.
+      Measured with ``d_max=6``, every accepted point lies within 6 Å of an
+      atom and half within 4.5 Å, on targets from a 13-atom neurotransmitter
+      up to a 1408-atom protein. Returns a :class:`SurfaceFollowingSampler`.
 
-    - ``mode="surface-following"``: a point is kept only while some target
-      atom lies within ``d_max`` of it, so accepted points form a band over
-      the surface that dips into pockets and wraps around protrusions. On
-      the same target with ``d_max=6``, half the accepted points sit within
-      4.4 Å of an atom and none beyond 6 Å. It spends more draws per
-      accepted point. Returns a :class:`SurfaceFollowingSampler`.
+    - ``mode="sphere"``: the sphere is centred on the target's centre of mass
+      with a radius of ``furthest atom + reach``, and every point outside the
+      surface is kept. Most of that volume is open solvent: 85.6% of accepted
+      points land more than 6 Å from the nearest atom for serotonin, 87.0%
+      for cortisol, 87.7% for a 1408-atom protein. A strand placed there
+      floats free of the target. Returns a :class:`SurfaceSampler`.
 
-    The two limits measure different things, which is what makes the second
-    mode follow the shape: ``reach`` extends the target's overall bounding
-    radius, one number for the whole target, while ``d_max`` is measured
-    from whichever atom happens to be nearest the point.
+    The two limits measure different things, which is what makes the default
+    follow the shape. ``reach`` extends the target's overall bounding radius,
+    one number fixed for the whole target, so the right value depends on the
+    target's size and shape. ``d_max`` is measured from whichever atom happens
+    to be nearest the point, so one value serves every target size.
 
-    Sphere mode can be aimed at one site with `site_centre`, which replaces
-    the auto-sized sphere with one of `site_radius` around a chosen point.
+    Either mode can be aimed at one site with `site_centre`, which replaces
+    the auto-sized region with one of `site_radius` around a chosen point.
+    Combining it with the default gives poses that are both near the site and
+    against the surface.
 
     Parameters
     ----------
     complex_obj
         Built ligand-only ``Complex`` (positions + topology).
-    mode : {"sphere", "surface-following"}, default "sphere"
+    mode : {"surface-following", "sphere"}, default "surface-following"
         Which sampler to construct.
     reach : float, default 10.0
         ``mode="sphere"`` only. How far the bounding sphere extends
         past the ligand's bounding radius (Å). Must be ``>= 0``.
     d_max : float, default 6.0
-        ``mode="surface-following"`` only. Band thickness from the
-        molecular surface (Å). Must be ``> 0``.
+        ``mode="surface-following"`` only. How far from the nearest target
+        atom a pose may sit (Å). Must be ``> 0``. The default suits every
+        target size, since it is measured locally rather than from the
+        target's overall radius.
     probe : float, default 1.4
         Probe radius for the SAS rejection (Å), water-equivalent by
         default. Must be ``>= 0``. Used by both modes.
     site_centre : array-like, optional
-        ``mode="sphere"`` only. Shape ``(3,)`` point in ångström to sample
-        around, in the target's coordinate frame. Give it when the binding
-        site is known: the whole sample budget is then spent on that site
-        rather than spread over the target's entire surface. Omit it and the
-        region is sized to hold the whole target.
+        Shape ``(3,)`` point in ångström to sample around, in the target's
+        coordinate frame. Give it when the binding site is known: the whole
+        sample budget is then spent on that site rather than spread over the
+        target's entire surface. Omit it and the region covers the whole
+        target. Works with either mode.
     site_radius : float, default 15.0
         How far the region reaches from `site_centre`, in ångström. Applies
         only alongside `site_centre`. Must be ``> 0``.
@@ -799,14 +818,11 @@ def make_sampler(
     """
     if probe < 0:
         raise ValueError(f"probe must be >= 0, got {probe}")
+    if reach < 0:
+        raise ValueError(f"reach must be >= 0, got {reach}")
     if site_centre is None and site_radius is not None:
         raise ValueError("site_radius applies only alongside site_centre.")
     if site_centre is not None:
-        if mode != "sphere":
-            raise ValueError(
-                f"site_centre applies only to mode='sphere', got mode={mode!r}. "
-                f"Surface-following covers the whole surface."
-            )
         site_centre = np.asarray(site_centre, dtype=float)
         if site_centre.shape != (3,):
             raise ValueError(
@@ -818,8 +834,6 @@ def make_sampler(
             raise ValueError(f"site_radius must be > 0, got {site_radius}")
 
     if mode == "sphere":
-        if reach < 0:
-            raise ValueError(f"reach must be >= 0, got {reach}")
         if site_centre is None:
             dims = compute_envelope_dims(complex_obj, reach)
         else:
@@ -828,7 +842,14 @@ def make_sampler(
         excluder = Excluder(complex_obj, probe=probe)
         return SurfaceSampler(envelope=envelope, excluder=excluder)
     if mode == "surface-following":
-        return SurfaceFollowingSampler(complex_obj, d_max=d_max, probe=probe, rng=rng)
+        return SurfaceFollowingSampler(
+            complex_obj,
+            d_max=d_max,
+            probe=probe,
+            centre=site_centre,
+            radius=site_radius,
+            rng=rng,
+        )
     raise ValueError(
         f"Unknown mode {mode!r}; expected one of 'sphere', 'surface-following'."
     )

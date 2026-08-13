@@ -65,7 +65,7 @@ class MawsRunner:
         remove_h: bool = False,
         drop_hetatm: bool = False,
         verbose: bool = False,
-        sampler_mode: SamplerMode = "sphere",
+        sampler_mode: SamplerMode = "surface-following",
         reach: float = 10.0,
         d_max: float = 6.0,
         site_centre: Sequence[float] | None = None,
