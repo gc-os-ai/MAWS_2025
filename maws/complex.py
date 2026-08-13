@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import warnings
+from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -80,6 +81,8 @@ class Complex:
         self.system: mm.System | None = None
         self.integrator: mm.Integrator | None = None
         self.simulation: app.Simulation | None = None
+        self._bond_adjacency: dict[int, set[int]] | None = None
+        self._moving_set_cache: dict[tuple[int, int], list[int]] = {}
 
     # Chains-------------------------------------
 
@@ -441,6 +444,10 @@ class Complex:
         self.inpcrd = app.AmberInpcrdFile(str(cache_crd))
         self.topology = self.prmtop.topology
         self.positions = self.inpcrd.positions
+        # A different topology means different connectivity, so anything
+        # derived from the previous one is stale.
+        self._bond_adjacency = None
+        self._moving_set_cache = {}
         self.integrator = mm.LangevinIntegrator(
             300.0 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
         )
@@ -688,153 +695,286 @@ class Complex:
                     + self.positions[chain.start + chain.length :]
                 )
 
-    def rotate_element(
-        self, element: Sequence[int], angle: float, reverse: bool = False
-    ) -> None:
-        """
-        Rotate a contiguous **global** element by ``angle`` radians.
+    def _adjacency(self) -> dict[int, set[int]]:
+        """Return each atom index mapped to the indices bonded to it.
 
-        Parameters
-        ----------
-        element : Sequence[int]
-            ``[start, bond, end_exclusive]`` in **global** atom indices.
-            The rotation axis is computed internally as
-            ``positions[bond] - positions[start]`` (this is a unit-bearing vector).
-        angle : float
-            Rotation angle in **radians**.
-        reverse : bool, default=False
-            Rotate the fragment **upstream** of the bond - the range
-            ``[end, bond)`` - instead of the downstream ``[bond, end)``.
-            Either way the axis passes through the bond atom, so both bonded
-            atoms stay put.
+        Read from the topology that :meth:`build` loads, and kept until the
+        next build replaces it.
+
+        Returns
+        -------
+        dict[int, set[int]]
+            One entry per atom in the Complex.
 
         Raises
         ------
         ValueError
-            If :attr:`positions` is not initialized, or if the element does
-            not describe a non-empty range in the requested direction.
+            If the Complex has no topology, because :meth:`build` has not run.
         """
+        if self._bond_adjacency is None:
+            if self.topology is None:
+                raise ValueError(
+                    "This Complex has no topology; call build() before rotating."
+                )
+            adjacency: dict[int, set[int]] = {
+                atom.index: set() for atom in self.topology.atoms()
+            }
+            for first, second in self.topology.bonds():
+                adjacency[first.index].add(second.index)
+                adjacency[second.index].add(first.index)
+            self._bond_adjacency = adjacency
+        return self._bond_adjacency
 
+    def moving_set(self, fixed: int, pivot: int) -> list[int]:
+        """moving_set(fixed, pivot) -> list[int]
+
+        Return the atoms that move when one bond is turned.
+
+        Deleting a single bond splits a molecule into two connected parts.
+        Turning that bond moves one part and leaves the other where it is.
+        This returns the part containing `pivot`, found by following bonds
+        outward from it and never crossing the `fixed`-`pivot` bond.
+
+        The answer comes from which atoms are bonded, so it does not depend
+        on the order the atoms happen to be stored in.
+
+        Parameters
+        ----------
+        fixed : int
+            Index of the bonded atom on the side that stays put.
+        pivot : int
+            Index of the bonded atom on the side that moves. It is included
+            in the result, but it lies on the rotation axis and so keeps its
+            position.
+
+        Returns
+        -------
+        list[int]
+            Atom indices, ascending.
+
+        Raises
+        ------
+        ValueError
+            If the Complex has no topology, or if the two atoms named are not
+            bonded to each other.
+
+        See Also
+        --------
+        rotate_element : Turns a bond, using this to decide what moves.
+
+        Notes
+        -----
+        Answers are cached. Connectivity is fixed between builds, and this is
+        consulted once per conformation sampled.
+
+        Examples
+        --------
+        The 14 atoms of a guanine base move when its C1'-N9 bond is turned.
+
+        >>> complex.moving_set(c1_prime_index, n9_index)  # doctest: +SKIP
+        [44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57]
+        """
+        cached = self._moving_set_cache.get((fixed, pivot))
+        if cached is not None:
+            return cached
+
+        adjacency = self._adjacency()
+        if pivot not in adjacency.get(fixed, ()):
+            raise ValueError(
+                f"Atoms {fixed} and {pivot} are not bonded, so there is no "
+                f"bond between them to turn."
+            )
+
+        reached = {pivot}
+        queue = deque([pivot])
+        while queue:
+            for neighbour in adjacency[queue.popleft()]:
+                if neighbour != fixed and neighbour not in reached:
+                    reached.add(neighbour)
+                    queue.append(neighbour)
+
+        result = sorted(reached)
+        self._moving_set_cache[(fixed, pivot)] = result
+        return result
+
+    def rotate_element(
+        self, element: Sequence[int], angle: float, reverse: bool = False
+    ) -> None:
+        """Turn one bond by `angle` radians.
+
+        A torsion is a turn of part of a molecule about one of its own bonds.
+        It changes the shape while leaving every bond length and bond angle
+        as it was.
+
+        Parameters
+        ----------
+        element : sequence of int
+            ``[first, second]`` atom indices naming the bond to turn, counted
+            across the whole Complex. A third entry is accepted and ignored;
+            which atoms move is read from the topology.
+        angle : float
+            How far to turn, in radians.
+        reverse : bool, default=False
+            Turn the part of the molecule joined to `first` rather than the
+            part joined to `second`. Both named atoms sit on the rotation
+            axis, so either choice leaves all bond lengths unchanged.
+
+        Raises
+        ------
+        ValueError
+            If :attr:`positions` is unset, if the Complex has no topology, or
+            if the two atoms named are not bonded to each other.
+
+        See Also
+        --------
+        moving_set : Decides which atoms this moves.
+        rotate_global : Turns a whole chain about an axis of your choosing.
+
+        Examples
+        --------
+        >>> before = complex.positions[:]  # doctest: +SKIP
+        >>> complex.rotate_element([c1_prime, n9], 1.0)  # doctest: +SKIP
+        >>> complex.positions == before  # doctest: +SKIP
+        False
+        """
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
+
+        first, second = element[0], element[1]
+        fixed, pivot = (second, first) if reverse else (first, second)
+        positions = self.positions
+        self._rotate_indices(
+            self.moving_set(fixed, pivot),
+            positions[second] - positions[first],
+            angle,
+            pivot,
+        )
+
+    def _rotate_indices(
+        self,
+        indices: Sequence[int],
+        axis: Quantity,
+        angle: float,
+        centre: int,
+    ) -> None:
+        r"""Turn the named atoms about an axis through one of them.
+
+        Parameters
+        ----------
+        indices : sequence of int
+            Atom indices to move, counted across the whole Complex.
+        axis : openmm.unit.Quantity
+            Direction of the rotation axis, a 3-vector in ångström. Only the
+            direction is used; the length is discarded.
+        angle : float
+            How far to turn, in radians.
+        centre : int
+            Index of the atom the axis passes through. It stays where it is,
+            and so does anything else lying on the axis.
+
+        Notes
+        -----
+        Rotation matrix built from the half-angle :math:`\phi/2`, with
+        :math:`s = \sin(\phi/2)`, :math:`c = \cos(\phi/2)` and the axis
+        written as a unit vector :math:`(x, y, z)`:
+
+        .. math::
+            R_{00} = 2 (x^2 - 1) s^2 + 1
+            \qquad
+            R_{01} = 2 x y s^2 - 2 z c s
+
+        with the other entries following by cyclic permutation. Positions are
+        multiplied as :math:`v R`, which turns by :math:`-\phi`. Nothing in
+        this package depends on that sign, since angles are drawn from a range
+        symmetric about zero.
+
+        :attr:`positions` is replaced.
+        """
+        x, y, z = np.asarray(nostrom(axis)) / np.linalg.norm(np.asarray(nostrom(axis)))
+        s = np.sin(angle / 2.0)
+        c = np.cos(angle / 2.0)
+        rot = np.array(
+            [
+                [
+                    2 * (x**2 - 1) * s**2 + 1,
+                    2 * x * y * s**2 - 2 * z * c * s,
+                    2 * x * z * s**2 + 2 * y * c * s,
+                ],
+                [
+                    2 * x * y * s**2 + 2 * z * c * s,
+                    2 * (y**2 - 1) * s**2 + 1,
+                    2 * z * y * s**2 - 2 * x * c * s,
+                ],
+                [
+                    2 * x * z * s**2 - 2 * y * c * s,
+                    2 * z * y * s**2 + 2 * x * c * s,
+                    2 * (z**2 - 1) * s**2 + 1,
+                ],
+            ]
+        )
+
         pos = self.positions[:]
-        start, bond, end = element
-
-        # Reject a triple that describes an empty or backwards range rather
-        # than silently rotating nothing. Getting this wrong used to be
-        # reinterpreted as a different rotation entirely (issue #47, A7).
-        lo, hi = (end, bond) if reverse else (bond, end)
-        if hi <= lo:
-            direction = "reverse" if reverse else "forward"
-            raise ValueError(
-                f"Rotable element {list(element)} describes an empty "
-                f"{direction} range [{lo}:{hi}); expected end > start."
-            )
-
-        # The axis is the bond itself, whichever fragment we end up turning.
-        vec_a = pos[bond] - pos[start]
-
-        if reverse:
-            # rotate_global(glob=False) turns [element[1], element[2]) and, when
-            # reverse is set, pivots on element[2]. Passing [start, end, bond]
-            # therefore turns [end, bond) about an axis running through the bond
-            # atom, which leaves both bonded atoms where they were.
-            self.rotate_global(
-                [start, end, bond], vec_a, angle, reverse=True, glob=False
-            )
-        else:
-            self.rotate_global(
-                [start, bond, end], vec_a, angle, reverse=False, glob=False
-            )
+        to_origin = mm.Vec3(0, 0, 0) * unit.angstroms - pos[centre]
+        for j in indices:
+            shifted = (pos[j] + to_origin).value_in_unit(unit.angstrom)
+            turned = np.dot(np.array(shifted), rot)
+            pos[j] = mm.Vec3(*turned) * unit.angstrom - to_origin
+        self.positions = pos[:]
 
     def rotate_global(
         self,
         element: Sequence[int],
-        axis: Quantity,  # must have length units (Å)
+        axis: Quantity,
         angle: float,
         reverse: bool = False,
         glob: bool = True,
     ) -> None:
-        """
-        Core rotation kernel (Rodrigues-style) for either the whole chain
-        (``glob=True``) or a sub-element (``glob=False``).
+        """Turn a contiguous run of atoms about an axis of your choosing.
+
+        Unlike :meth:`rotate_element`, the axis here is given rather than
+        taken from a bond, so this can reorient a whole chain in space.
 
         Parameters
         ----------
-        element : Sequence[int]
-            ``[start, bond, end_exclusive]`` in **global** atom indices.
-            If ``reverse`` is True, the pivot used for the pre/post shifts is
-            taken from ``element[2]`` (end) instead of the start/bond pair.
+        element : sequence of int
+            ``[start, bond, end]`` atom indices, counted across the whole
+            Complex. ``end`` is exclusive.
         axis : openmm.unit.Quantity
-            Rotation axis as a 3-vector **with length units** (Å).
-            Examples:
-            ``np.array([0, 1, 0]) * unit.angstrom``,
-            ``mm.Vec3(0, 1, 0) * unit.angstrom``.
-            A raw NumPy array **without units is not accepted**—pass through
-            :func:`maws.helpers.angstrom` if you need to attach units.
+            Direction of the rotation axis, a 3-vector in ångström. Attach
+            units with :func:`maws.helpers.angstrom` if you have a plain
+            array; a unitless one is rejected.
         angle : float
-            Rotation angle in **radians**.
+            How far to turn, in radians.
         reverse : bool, default=False
-            If True, rotate the **complement** of the selected range relative to
-            the pivot (see ``element`` note above).
+            Put the axis through ``end`` instead of through the first atom of
+            the range.
         glob : bool, default=True
-            If True, rotate atoms in the range ``[element[0]:element[2])``.
-            If False, rotate the subrange ``[element[1]:element[2])`` (used by
-            :meth:`rotate_element`).
+            Turn ``[start, end)``. Set ``False`` to turn ``[bond, end)``.
 
         Raises
         ------
         ValueError
             If :attr:`positions` is not initialized.
 
-        Notes
-        -----
-        - Distances are treated in Å. The axis direction is normalized; its
-        magnitude is ignored after unit conversion.
-        - Updates :attr:`positions` in place.
-        """
+        See Also
+        --------
+        rotate_element : Turns a single bond, working out what moves.
 
+        Examples
+        --------
+        Point a chain along a different axis, turning about its first atom.
+
+        >>> from maws.helpers import angstrom
+        >>> complex.rotate_global(  # doctest: +SKIP
+        ...     chain.element, angstrom([0.0, 0.0, 1.0]), 3.14159
+        ... )
+        """
         if not self.positions:
             raise ValueError("This Complex contains no positions! You CANNOT rotate!")
 
-        x, y, z = np.asarray(nostrom(axis)) / (
-            np.linalg.norm(np.asarray(nostrom(axis)))
-        )
-        phi_2 = angle / 2.0
-        pos = self.positions[:]
-        starting_index = 0 if glob else 1
-        shift_forward = (
-            mm.Vec3(0, 0, 0) * unit.angstroms
-            - pos[element[2] if reverse else element[starting_index]]
-        )
-        s = np.sin(phi_2)
-        c = np.cos(phi_2)
-        rot = np.array(
-            [
-                [
-                    2 * (np.power(x, 2) - 1) * np.power(s, 2) + 1,
-                    2 * x * y * np.power(s, 2) - 2 * z * c * s,
-                    2 * x * z * np.power(s, 2) + 2 * y * c * s,
-                ],
-                [
-                    2 * x * y * np.power(s, 2) + 2 * z * c * s,
-                    2 * (np.power(y, 2) - 1) * np.power(s, 2) + 1,
-                    2 * z * y * np.power(s, 2) - 2 * x * c * s,
-                ],
-                [
-                    2 * x * z * np.power(s, 2) - 2 * y * c * s,
-                    2 * z * y * np.power(s, 2) + 2 * x * c * s,
-                    2 * (np.power(z, 2) - 1) * np.power(s, 2) + 1,
-                ],
-            ]
-        )
-        for j in range(element[starting_index], element[2]):
-            pos[j] += shift_forward
-        for j in range(element[starting_index], element[2]):
-            roted = np.dot(np.array(pos[j].value_in_unit(unit.angstrom)), rot)
-            pos[j] = mm.Vec3(roted[0], roted[1], roted[2]) * unit.angstrom
-            pos[j] -= shift_forward
-        self.positions = pos[:]
+        first = element[0] if glob else element[1]
+        centre = element[2] if reverse else first
+        self._rotate_indices(range(first, element[2]), axis, angle, centre)
 
     def translate_global(self, element: Sequence[int], shift: Quantity) -> None:
         """

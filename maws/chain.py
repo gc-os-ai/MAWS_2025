@@ -258,39 +258,41 @@ class Chain:
         ]
 
     def rotate_element(self, element, angle: float, reverse: bool = False):
-        """
-        Rotate a chain-local element by ``angle`` radians.
+        """Turn one bond of this chain by `angle` radians.
 
         Parameters
         ----------
-        element : list[int | None]
-            Triple ``[start, bond, end_or_None]`` **relative to this chain**.
-            - ``start`` : first atom index (inclusive)
-            - ``bond``  : atom forming the rotation axis with ``start``
-            - ``end``   : one-past-last atom index (exclusive). If ``None``,
-              the element extends to the end of the chain.
+        element : sequence of int
+            ``[first, second]`` atom indices naming the bond to turn, counted
+            from the start of this chain. Longer sequences are accepted and
+            the extra entries ignored.
         angle : float
-            Rotation angle in radians.
+            How far to turn, in radians.
         reverse : bool, default=False
-            If ``True`` and ``end`` is ``None``, rotate the **complement** of
-            the specified range (the part *not* selected).
+            Turn the part of the molecule joined to `first` rather than the
+            part joined to `second`.
+
+        Raises
+        ------
+        ValueError
+            If fewer than two indices are given.
+
+        See Also
+        --------
+        rotate_in_residue : Names a bond by residue and torsion instead.
+        maws.complex.Complex.rotate_element : Does the work.
 
         Notes
         -----
-        This method converts chain-local indices to **global** atom indices by
-        adding ``self.start``, then delegates to :meth:`Complex.rotate_element`.
+        Indices are counted from the start of this chain; they are shifted to
+        whole-Complex indices here.
         """
-        if len(element) != 3:
-            raise ValueError("Rotable element contains too many or too few components!")
-        start, bond, end = element
-
-        # A reverse rotation turns the fragment *upstream* of the bond, so its
-        # range runs from the chain's first atom up to the bond atom. Forward
-        # runs from the bond atom to `end` (or the end of the chain).
-        end = 0 if reverse else (self.length if end is None else end)
-
+        if len(element) < 2:
+            raise ValueError(
+                f"A bond needs two atom indices; got {len(element)}: {list(element)}"
+            )
         self.complex.rotate_element(
-            [start + self.start, bond + self.start, end + self.start],
+            [element[0] + self.start, element[1] + self.start],
             angle,
             reverse=reverse,
         )

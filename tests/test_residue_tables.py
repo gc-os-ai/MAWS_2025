@@ -1,13 +1,20 @@
-"""The RNA/DNA residue tables must describe the molecules LEaP actually builds.
+"""Checks the residue tables against the molecules AmberTools actually builds.
 
-rna_structure.py and dna_structure.py hardcode atom counts and torsion
-definitions as bare integer offsets. Nothing in the library checks them
-against a real structure, so a transcription slip stays invisible until it
-shows up as bad geometry. See issue #47 (finding A4).
+A *residue* is one letter of an aptamer: G, A, U or C for RNA, and the same
+with a leading D for DNA. Each comes in four forms depending on where it sits
+in the strand, which is why there are sixteen per polymer. A *torsion* is a
+turn of part of a molecule about one of its own bonds.
+
+:mod:`maws.rna_structure` and :mod:`maws.dna_structure` describe every residue
+as bare integers: how many atoms it has, and which atom positions form each
+torsion. Those integers are written by hand, and a wrong one still runs. These
+tests build all thirty-two residues with LEaP, the AmberTools program that
+turns a sequence into a molecule, and compare the tables against the result.
 """
 
 import subprocess
 import tempfile
+from collections import defaultdict, deque
 from pathlib import Path
 
 import pytest
@@ -36,10 +43,18 @@ pytestmark = [
 
 
 def _leap_units():
-    """(sequence, unit name, residue names in the order we asked for them).
+    """Return the LEaP units needed to cover every residue form.
 
-    A trinucleotide gives the 5', internal and 3' forms; a lone residue gives
-    the N form. Between them that is all 16 templates per polymer.
+    A strand of three residues yields the start form, the middle form and the
+    end form; a strand of one yields the standalone form. Four bases times two
+    polymers times those two strands reaches all thirty-two.
+
+    Returns
+    -------
+    list of tuple
+        ``(sequence, unit_name, resnames)`` per unit, where `sequence` is the
+        LEaP sequence string, `unit_name` names the files it writes, and
+        `resnames` lists the residues in the order they were requested.
     """
     units = []
     for prefix, bases in (("", "GAUC"), ("D", "GATC")):
@@ -52,11 +67,21 @@ def _leap_units():
 
 @pytest.fixture(scope="session")
 def residue_templates():
-    """resname -> (atom names, intra-residue bonds as residue-local pairs).
+    """Build every residue once and return its atoms and internal bonds.
 
-    Residues are keyed by the name we asked LEaP for, not the name it reports
-    back: Amber labels both G5 and G3 as plain "G", so trusting the label
-    would silently collapse three templates into one.
+    Returns
+    -------
+    dict
+        Residue name to ``(atom_names, bonds)``. `atom_names` is in file
+        order; `bonds` holds index pairs counted from the start of that
+        residue, covering only bonds with both ends inside it.
+
+    Notes
+    -----
+    Residues are keyed by the name requested from LEaP rather than the name it
+    reports back. Amber labels both the start form and the end form of G as
+    plain ``"G"``, so keying on the reported name merges three residues into
+    one.
     """
     units = _leap_units()
     with tempfile.TemporaryDirectory() as td:
@@ -96,8 +121,152 @@ def residue_templates():
         return templates
 
 
+@pytest.fixture(scope="session")
+def assembled_chains():
+    """Build every LEaP unit once and return it as a whole strand.
+
+    Returns
+    -------
+    dict
+        Unit name to ``(resnames, offsets, n_atoms, bonds)``. `offsets` gives
+        each residue's first atom index within the strand, and `bonds` holds
+        index pairs counted across the whole strand.
+
+    See Also
+    --------
+    residue_templates : The same molecules split into single residues.
+
+    Notes
+    -----
+    Whole strands are needed because a torsion whose table entry ends in
+    ``None`` moves every atom to the end of the strand, not to the end of the
+    residue it belongs to.
+    """
+    units = _leap_units()
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        lines = ["source leaprc.RNA.OL3", "source leaprc.DNA.OL21"]
+        for sequence, unit_name, _ in units:
+            lines += [
+                f"{unit_name} = sequence {{ {sequence} }}",
+                f"saveamberparm {unit_name} {d}/{unit_name}.prmtop "
+                f"{d}/{unit_name}.inpcrd",
+            ]
+        lines.append("quit")
+        (d / "leap.in").write_text("\n".join(lines))
+        subprocess.run(
+            [find_exe("tleap"), "-f", str(d / "leap.in")],
+            cwd=d,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        chains = {}
+        for _sequence, unit_name, wanted in units:
+            topology = AmberPrmtopFile(str(d / f"{unit_name}.prmtop")).topology
+            offsets, tally = [], 0
+            for residue in topology.residues():
+                offsets.append(tally)
+                tally += sum(1 for _ in residue.atoms())
+            chains[unit_name] = (
+                wanted,
+                offsets,
+                topology.getNumAtoms(),
+                {(b[0].index, b[1].index) for b in topology.bonds()},
+            )
+        return chains
+
+
+def moving_set_from_bonds(bonds, fixed, pivot):
+    """Return the atoms joined to `pivot` once the `fixed`-`pivot` bond is cut.
+
+    Written out here rather than calling
+    :meth:`maws.complex.Complex.moving_set`, which computes the same thing: a
+    test that checks a function against itself passes whatever the function
+    does.
+
+    Parameters
+    ----------
+    bonds : iterable of tuple of int
+        Index pairs, one per bond.
+    fixed : int
+        Index of the bonded atom whose side is discarded.
+    pivot : int
+        Index of the bonded atom whose side is returned. Included in the
+        result.
+
+    Returns
+    -------
+    set of int
+        Atom indices reachable from `pivot` without crossing the cut bond.
+
+    Examples
+    --------
+    A four-atom chain cut in the middle splits into two pairs.
+
+    >>> sorted(moving_set_from_bonds([(0, 1), (1, 2), (2, 3)], 1, 2))
+    [2, 3]
+    """
+    adjacency = defaultdict(set)
+    for a, b in bonds:
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+
+    seen, queue, reached = {fixed}, deque([pivot]), {pivot}
+    while queue:
+        for neighbour in adjacency[queue.popleft()]:
+            if neighbour not in seen and neighbour not in reached:
+                reached.add(neighbour)
+                queue.append(neighbour)
+    return reached
+
+
+UNIT_NAMES = [name for _seq, name, _res in _leap_units()] if HAS_DEPS else []
+
+
+@pytest.mark.parametrize("unit_name", UNIT_NAMES)
+def test_table_ranges_match_the_bond_graph(assembled_chains, unit_name):
+    """Every hand-written atom range names the atoms the bonds say it should."""
+    resnames, offsets, n_atoms, bonds = assembled_chains[unit_name]
+    is_dna = resnames[0].startswith("D")
+    structure = (load_dna_structure if is_dna else load_rna_structure)()
+
+    mismatches = []
+    for residue_index, resname in enumerate(resnames):
+        offset = offsets[residue_index]
+        length = structure.residue_length[resname]
+        for j, spec in enumerate(structure.rotating_elements[resname]):
+            start = (spec[0] + length if spec[0] < 0 else spec[0]) + offset
+            pivot = (spec[1] + length if spec[1] < 0 else spec[1]) + offset
+            end = (
+                n_atoms
+                if spec[2] is None
+                else (spec[2] + length if spec[2] < 0 else spec[2]) + offset
+            )
+
+            from_table = set(range(pivot, end))
+            from_graph = moving_set_from_bonds(bonds, start, pivot)
+            if from_table != from_graph:
+                mismatches.append(
+                    f"{resname} j={j} spec {spec}: table {len(from_table)} atoms, "
+                    f"graph {len(from_graph)}, "
+                    f"differ by {sorted(from_table ^ from_graph)}"
+                )
+
+    assert not mismatches, f"{unit_name}: " + "; ".join(mismatches)
+
+
 def _all_residues():
-    """(loader, polymer tag, residue name) for every template in both tables."""
+    """Return one parametrise case per residue across both tables.
+
+    Returns
+    -------
+    list of tuple
+        ``(loader, tag, resname)``, where `loader` builds the
+        :class:`~maws.structure.Structure` holding that residue and `tag` is
+        ``"RNA"`` or ``"DNA"``.
+    """
     if not HAS_DEPS:
         return []
     cases = []
@@ -112,11 +281,7 @@ RESIDUE_IDS = [f"{tag}-{name}" for _loader, tag, name in RESIDUES]
 
 @pytest.mark.parametrize(("loader", "tag", "resname"), RESIDUES, ids=RESIDUE_IDS)
 def test_torsion_axes_are_covalent_bonds(residue_templates, loader, tag, resname):
-    """Every torsion must turn about a real bond.
-
-    Rotating about a pair of atoms that are not bonded is not a torsion at
-    all - it swings a fragment about an arbitrary line through the molecule.
-    """
+    """Every torsion turns about two atoms that are bonded to each other."""
     structure = loader()
     atom_names, bonds = residue_templates[resname]
     length = structure.residue_length[resname]
@@ -140,11 +305,7 @@ def test_torsion_axes_are_covalent_bonds(residue_templates, loader, tag, resname
 def test_residue_length_matches_the_built_template(
     residue_templates, loader, tag, resname
 ):
-    """RESIDUE_LENGTH is what every negative index is resolved against.
-
-    If it drifts from the real atom count, every negative offset in the
-    torsion and connectivity tables silently points at the wrong atom.
-    """
+    """Every declared residue length matches the atom count LEaP builds."""
     atom_names, _bonds = residue_templates[resname]
     declared = loader().residue_length[resname]
     assert declared == len(atom_names), (

@@ -4,14 +4,12 @@ A torsion rotation is allowed to change dihedral angles. It is never
 allowed to change a covalent bond length. See issue #47.
 """
 
-import subprocess
-import tempfile
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 from openmm import unit
-from openmm.app import AmberPrmtopFile, PDBFile
 
 try:
     from maws.complex import Complex
@@ -33,13 +31,6 @@ pytestmark = [
     pytest.mark.skipif(not HAS_OPENMM, reason="OpenMM not available"),
     pytest.mark.skipif(not HAS_AMBERTOOLS, reason="AmberTools (tleap) not available"),
 ]
-
-LEAP_INPUT = """source leaprc.RNA.OL3
-r1 = sequence {{ G5 A3 }}
-savepdb r1 {d}/ref.pdb
-saveamberparm r1 {d}/ref.prmtop {d}/ref.inpcrd
-quit
-"""
 
 # How much is a bond allowed to change length when we rotate a torsion?
 #
@@ -97,40 +88,44 @@ def bond_lengths(positions, bonds):
 
 
 @pytest.fixture(scope="session")
-def reference_dinucleotide():
-    """LEaP-built RNA G5-A3. Returns (positions, bonds).
+def built_complex(tmp_path_factory):
+    """A built Complex holding the same G5-A3 chain.
 
-    The bond list comes from the prmtop, i.e. from AmberTools - never
-    hand-written and never derived from the code under test.
+    Built rather than hand-assembled because rotating needs the topology,
+    which is where the bond list comes from. Built once; each test takes a
+    copy of the coordinates.
     """
-    with tempfile.TemporaryDirectory() as td:
-        d = Path(td)
-        (d / "leap.in").write_text(LEAP_INPUT.format(d=d))
-        subprocess.run(
-            [find_exe("tleap"), "-f", str(d / "leap.in")],
-            cwd=d,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        pdb = PDBFile(str(d / "ref.pdb"))
-        prm = AmberPrmtopFile(str(d / "ref.prmtop"))
-        bonds = [(b[0].index, b[1].index) for b in prm.topology.bonds()]
-        return pdb.positions, bonds
+    workdir = tmp_path_factory.mktemp("leap")
+    previous = Path.cwd()
+    os.chdir(workdir)
+    try:
+        cpx = Complex()
+        cpx.add_chain("G A", load_rna_structure())
+        cpx.build()
+        return cpx
+    finally:
+        os.chdir(previous)
+
+
+@pytest.fixture(scope="session")
+def bonds(built_complex):
+    """Covalent bonds of the built chain, as index pairs.
+
+    Taken from the topology AmberTools produced, so it is never a
+    hand-written list.
+    """
+    return [(b[0].index, b[1].index) for b in built_complex.topology.bonds()]
 
 
 @pytest.fixture
-def dinucleotide_complex(reference_dinucleotide):
-    """A fresh Complex per test, on the reference coordinates.
+def dinucleotide_complex(built_complex):
+    """The built Complex with its coordinates reset before each test.
 
-    positions[:] copies: the session fixture is shared, so in-place
-    mutation would leak between tests.
+    The Complex is shared across the session, so every test must start from
+    the same coordinates rather than from whatever the last one left.
     """
-    positions, _bonds = reference_dinucleotide
-    cpx = Complex()
-    cpx.add_chain("G A", load_rna_structure())
-    cpx.positions = positions[:]
-    return cpx
+    built_complex.positions = built_complex.inpcrd.positions[:]
+    return built_complex
 
 
 def assert_bonds_preserved(before, after, bonds, what):
@@ -162,10 +157,9 @@ PREPEND_TORSIONS = [(0, j, APPEND_TORSIONS[j][2]) for j in range(4)]
     ("residue", "torsion", "label"), APPEND_TORSIONS, ids=lambda v: str(v)
 )
 def test_append_torsion_preserves_bond_lengths(
-    reference_dinucleotide, dinucleotide_complex, residue, torsion, label
+    bonds, dinucleotide_complex, residue, torsion, label
 ):
     """No torsion on the append path may change a bond length."""
-    _positions, bonds = reference_dinucleotide
     before = bond_lengths(dinucleotide_complex.positions, bonds)
 
     dinucleotide_complex.aptamer_chain().rotate_in_residue(residue, torsion, 0.7)
@@ -178,10 +172,9 @@ def test_append_torsion_preserves_bond_lengths(
     ("residue", "torsion", "label"), PREPEND_TORSIONS, ids=lambda v: str(v)
 )
 def test_prepend_torsion_preserves_bond_lengths(
-    reference_dinucleotide, dinucleotide_complex, residue, torsion, label
+    bonds, dinucleotide_complex, residue, torsion, label
 ):
     """Same invariant on the prepend path, which uses reverse=True."""
-    _positions, bonds = reference_dinucleotide
     before = bond_lengths(dinucleotide_complex.positions, bonds)
 
     dinucleotide_complex.aptamer_chain().rotate_in_residue(
