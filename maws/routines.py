@@ -4,68 +4,33 @@ maws.routines
 
 Thermodynamic scoring function for the MAWS aptamer selection algorithm.
 
-This module provides the entropy-based scoring function `S()` used to evaluate
-aptamer-ligand binding configurations via Boltzmann-weighted sampling.
-
 Functions
 ---------
-S : Compute the entropy score from energy samples.
+entropy_score : Compute the entropy score from energy samples.
 
 Notes
 -----
-Uses `mpmath` for arbitrary-precision arithmetic to avoid numerical underflow
-when computing exponentials of large energy differences.
+Weights are evaluated in log-space via :func:`scipy.special.logsumexp`, so
+energies spanning thousands of kJ/mol neither underflow nor overflow in double
+precision.
 
 Examples
 --------
->>> from maws.routines import S
->>> energies = [100.0, 150.0, 200.0, 175.0]
->>> score = S(energies, beta=0.01)
->>> hasattr(score, "__float__")  # S returns mpf (high-precision float)
-True
+>>> from maws.routines import entropy_score
+>>> round(entropy_score([100.0, 150.0, 200.0, 175.0], beta=0.01), 6)
+-0.072433
 """
 
 import numpy as np
-from mpmath import mp as math
-
-# Set high precision for numerical stability with large energy ranges
-math.dps = 60
+from scipy.special import logsumexp
+from scipy.stats import entropy as _relative_entropy
 
 
-def _entropy(sample):
+def _boltzmann(sample, beta):
     """
-    Compute Shannon entropy of a probability distribution.
+    Compute normalised Boltzmann probabilities from energy samples.
 
-    Internal helper - use :func:`S` as the public API.
-
-    Parameters
-    ----------
-    sample : iterable
-        Probability distribution P(x). Must sum to 1.
-
-    Returns
-    -------
-    mpf
-        Shannon entropy H = -sum(P * log(P * N)).
-    """
-    sample = list(sample)
-    return -math.fsum(
-        map(
-            math.fmul,
-            np.asarray(sample),
-            map(
-                math.log,
-                map(math.fmul, np.asarray(sample), [len(sample)] * len(sample)),
-            ),
-        )
-    )
-
-
-def _zps(sample, beta):
-    """
-    Compute partition function, probabilities, and entropy from energy samples.
-
-    Internal helper - use :func:`S` as the public API.
+    Internal helper - use :func:`entropy_score` as the public API.
 
     Parameters
     ----------
@@ -76,33 +41,30 @@ def _zps(sample, beta):
 
     Returns
     -------
-    Z : mpf
-        Partition function Z = sum(exp(-beta * E)).
-    P : iterator
-        Boltzmann probabilities P(i) = exp(-beta * E_i) / Z.
-    entropy : mpf
-        Shannon entropy of the Boltzmann distribution.
+    P : numpy.ndarray
+        Boltzmann probabilities P(i) = exp(-beta * E_i) / Z, summing to 1.
+    log_z : float
+        Natural logarithm of the partition function Z = sum(exp(-beta * E)).
+        Returned in log-space because Z itself overflows double precision for
+        strongly negative energies.
     """
-    Z = math.fsum(
-        map(math.exp, map(math.fmul, [-beta] * len(sample), np.asarray(sample)))
-    )
-    P = map(
-        math.fdiv,
-        map(math.exp, map(math.fmul, [-beta] * len(sample), np.asarray(sample))),
-        np.asarray([Z] * len(sample)),
-    )
-    entropy = _entropy(P)
-    return Z, P, entropy
+    log_weights = -beta * np.asarray(sample, dtype=float)
+    log_z = float(logsumexp(log_weights))
+    return np.exp(log_weights - log_z), log_z
 
 
-def S(sample, beta=0.01):  # noqa: N802
+def entropy_score(sample, beta=0.01):
     """
-    Compute entropy score from energy samples.
+    Compute the entropy score of a set of sampled energies.
 
-    This is the primary scoring function used in MAWS. The entropy measures
-    the "spread" of the Boltzmann distribution over sampled conformations.
-    Lower (more negative) entropy indicates a more peaked distribution,
-    suggesting stronger binding affinity.
+    This is the primary scoring function used in MAWS. It measures the spread
+    of the Boltzmann distribution over sampled conformations: lower (more
+    negative) scores indicate a more peaked distribution, suggesting stronger
+    binding affinity.
+
+    The score is ``-sum(P * log(P * N))``, the negative Kullback-Leibler
+    divergence of the Boltzmann distribution from the uniform distribution. It
+    is therefore at most 0, reaching 0 only when all sampled energies are equal.
 
     Parameters
     ----------
@@ -113,14 +75,24 @@ def S(sample, beta=0.01):  # noqa: N802
 
     Returns
     -------
-    mpf
+    float
         Entropy of the Boltzmann distribution over sampled energies.
+
+    Raises
+    ------
+    ValueError
+        If `sample` is empty. There is no distribution to score, so no value
+        would be meaningful.
 
     Examples
     --------
-    >>> energies = [100.0, 150.0, 200.0]
-    >>> score = S(energies, beta=0.01)
-    >>> hasattr(score, "__float__")  # Returns mpf (high-precision)
-    True
+    >>> round(entropy_score([100.0, 150.0, 200.0], beta=0.01), 6)
+    -0.078421
     """
-    return _zps(sample, beta)[2]
+    energies = np.asarray(sample, dtype=float)
+    if energies.size == 0:
+        raise ValueError("sample must contain at least one energy value")
+
+    probabilities, _ = _boltzmann(energies, beta)
+    uniform = np.full(probabilities.size, 1.0 / probabilities.size)
+    return -float(_relative_entropy(probabilities, uniform))

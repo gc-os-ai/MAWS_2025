@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies via conda
         run: |
           conda activate maws
-          conda install -y openmm ambertools mpmath numba pandas numpy
+          conda install -y openmm ambertools scipy numba pandas numpy
 
       - name: Install package and dev dependencies
         run: |
@@ -103,7 +103,7 @@ jobs:
 
       - name: Install minimal dependencies
         run: |
-          pip install numpy openmm mpmath pandas pytest pytest-cov
+          pip install numpy openmm scipy pandas pytest pytest-cov
 
       - name: Install package
         run: pip install -e .
@@ -152,7 +152,7 @@ jobs:
         run: |
           conda activate maws-gpu
           # Install OpenMM with CUDA support
-          conda install -y openmm cudatoolkit ambertools mpmath numba pandas numpy
+          conda install -y openmm cudatoolkit ambertools scipy numba pandas numpy
 
       - name: Install package
         run: |

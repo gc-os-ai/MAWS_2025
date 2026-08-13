@@ -279,6 +279,7 @@ ligand_only.build()
 
 sampler = space.make_sampler(ligand_only)  # default: sphere envelope + SAS
 
+energies = []
 for _ in range(1000):
     pose = sampler.generator()  # Sample(position, axis, angle)
     cpx.translate_global(aptamer.element, pose.position)
@@ -288,14 +289,20 @@ for _ in range(1000):
         aptamer.rotate_in_residue(0, i, random_angle)
 
     cpx.minimize()
-    energy = cpx.get_energy()
+    energies.append(cpx.get_energy()[0])
 
     cpx.rebuild()  # Reset for next sample
+
+# 6. Score the candidate; MAWS keeps the lowest-scoring nucleotide
+from maws.routines import entropy_score
+
+score = entropy_score(energies, beta=0.01)
 ```
 
 See [docs/space.md](space.md) for the full surface-aware sampler API
 (`make_sampler`, `Sphere`, `Excluder`, `SurfaceSampler`, `SurfaceFollowingSampler`,
-and the two `mode=` options).
+and the two `mode=` options), and [docs/routines.md](routines.md) for the
+`entropy_score` scoring function that ranks candidates.
 
 ---
 
