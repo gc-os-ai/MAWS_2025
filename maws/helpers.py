@@ -261,3 +261,42 @@ def mass_weighted_center(
     pos = np.asarray(positions, dtype=float)
     m = np.asarray(masses, dtype=float)
     return (pos * m[:, None]).sum(axis=0) / m.sum()
+
+
+def atom_masses(topology) -> np.ndarray:
+    """
+    Read one mass per atom out of a topology, in atom index order.
+
+    Parameters
+    ----------
+    topology : openmm.app.Topology
+        Any object whose ``atoms()`` yields atoms carrying ``.element.mass``.
+        The mass may be an :class:`openmm.unit.Quantity` or a plain number
+        already in daltons.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(N,)`` masses in daltons, ordered to match a positions array.
+
+    See Also
+    --------
+    mass_weighted_center : The usual consumer of these.
+
+    Examples
+    --------
+    >>> from types import SimpleNamespace
+    >>> from openmm import unit
+    >>> from maws.helpers import atom_masses
+    >>> atom = SimpleNamespace(element=SimpleNamespace(mass=12.0 * unit.dalton))
+    >>> topology = SimpleNamespace(atoms=lambda: [atom, atom])
+    >>> list(atom_masses(topology))
+    [12.0, 12.0]
+    """
+    masses = []
+    for atom in topology.atoms():
+        mass = atom.element.mass
+        if hasattr(mass, "value_in_unit"):
+            mass = mass.value_in_unit(unit.dalton)
+        masses.append(float(mass))
+    return np.array(masses, dtype=float)

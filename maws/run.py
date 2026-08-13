@@ -240,8 +240,12 @@ class MawsRunner:
                 pose = sampler.generator()
                 rotation = rotations.generator()
 
-                cx.translate_global(aptamer.element, pose.position * unit.angstrom)
-                cx.rotate_global(aptamer.element, pose.axis * unit.angstrom, pose.angle)
+                cx.place_global(
+                    aptamer.element,
+                    pose.position * unit.angstrom,
+                    pose.axis * unit.angstrom,
+                    pose.angle,
+                )
 
                 for j in range(N_BACKBONE_TORSIONS):
                     aptamer.rotate_in_residue(0, j, rotation[j])

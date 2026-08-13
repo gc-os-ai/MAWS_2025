@@ -48,10 +48,9 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import numpy as np
-from openmm import unit
 from scipy.spatial import KDTree
 
-from maws.helpers import mass_weighted_center, nostrom
+from maws.helpers import atom_masses, mass_weighted_center, nostrom
 
 # Bondi (1964) "Van der Waals Volumes and Radii", J. Phys. Chem. 68(3):441-451.
 # These are the values used by Chimera, PyMOL, FreeSASA. Hardcoded rather
@@ -264,13 +263,6 @@ class Excluder:
         return bool((dists2 > self._inflated[idx] ** 2).all())
 
 
-def _atom_mass_in_dalton(atom) -> float:
-    m = atom.element.mass
-    if hasattr(m, "value_in_unit"):
-        return m.value_in_unit(unit.dalton)
-    return float(m)
-
-
 def compute_envelope_dims(complex_obj, reach: float) -> dict:
     """
     Compute auto-sized sphere envelope dimensions from the ligand atoms.
@@ -289,11 +281,7 @@ def compute_envelope_dims(complex_obj, reach: float) -> dict:
         Kwargs for :class:`Sphere`: ``{"radius": R_max + reach, "centre": COM}``.
     """
     pos = np.asarray(nostrom(complex_obj.positions), dtype=float)
-    masses = np.array(
-        [_atom_mass_in_dalton(a) for a in complex_obj.topology.atoms()],
-        dtype=float,
-    )
-    com = mass_weighted_center(pos, masses)
+    com = mass_weighted_center(pos, atom_masses(complex_obj.topology))
     dists = np.linalg.norm(pos - com, axis=1)
     return {"radius": float(dists.max()) + reach, "centre": com}
 
@@ -413,11 +401,7 @@ class SurfaceFollowingSampler:
         if d_max <= 0:
             raise ValueError(f"d_max must be > 0, got {d_max}")
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
-        masses = np.array(
-            [_atom_mass_in_dalton(a) for a in complex_obj.topology.atoms()],
-            dtype=float,
-        )
-        com = mass_weighted_center(positions, masses)
+        com = mass_weighted_center(positions, atom_masses(complex_obj.topology))
         R_max = float(np.linalg.norm(positions - com, axis=1).max())
         self._com = com
         self._R_bound = R_max + d_max
