@@ -10,7 +10,7 @@ import copy
 import logging
 from datetime import datetime
 
-from openmm import app, unit
+from openmm import app
 
 import maws.space as space
 from maws.complex import Complex
@@ -118,13 +118,24 @@ def parse_args():
         help="vdW probe radius for SAS rejection (Å). Default: 1.4 (water-like).",
     )
     parser.add_argument(
+        "--clash-tolerance",
+        type=_non_negative_float,
+        default=1.0,
+        help=(
+            "How far the placed strand may overlap the target's vdW spheres "
+            "before the pose is thrown away and redrawn (Å). Default: 1.0, "
+            "which admits hydrogen bonds and rejects steric clashes. "
+            "0 demands no overlap at all."
+        ),
+    )
+    parser.add_argument(
         "--salt-conc",
         type=_non_negative_float,
         default=0.15,
         help=(
             "Monovalent salt concentration (mol/L) for GB implicit-solvent "
             "Debye-Hückel screening. Default: 0.15 (physiological); 0 = unscreened. "
-            "Monovalent only (does not model Mg²⁺)."
+            "Monovalent only (only models Na+)."
         ),
     )
     return parser.parse_args()
@@ -284,21 +295,13 @@ def main():
 
             # Remember initial positions
             positions0 = cx.positions[:]
+            clash = space.ClashFilter(
+                cx, aptamer.element, tolerance=args.clash_tolerance
+            )
 
             # Sample orientations/rotations
             for _ in range(FIRST_CHUNK_SIZE):
-                pose = sampler.generator()
-                rotation = rotations.generator()
-
-                cx.place_global(
-                    aptamer.element,
-                    pose.position * unit.angstrom,
-                    pose.axis * unit.angstrom,
-                    pose.angle,
-                )
-
-                for j in range(N_ELEMENTS):
-                    aptamer.rotate_in_residue(0, j, rotation[j])
+                space.draw_clear_conformation(cx, aptamer, sampler, rotations, clash)
 
                 energy = cx.get_energy()[0]
                 if free_E is None or energy < free_E:

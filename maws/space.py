@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import numpy as np
+from openmm import unit
 from scipy.spatial import KDTree
 
 from maws.helpers import atom_masses, mass_weighted_center, nostrom
@@ -184,6 +185,51 @@ class NAngles:
         return np.random.uniform(0, 2 * np.pi, self.n)
 
 
+_WARNED_ELEMENTS: set[str] = set()
+"""Element symbols already reported as missing from :data:`_BONDI_VDW_RADII`.
+
+Process-wide, so a topology with thousands of atoms of an unlisted element
+produces one warning rather than thousands.
+"""
+
+
+def _vdw_radii(topology) -> np.ndarray:
+    """Return the van der Waals radius of every atom, in ångström.
+
+    Parameters
+    ----------
+    topology : openmm.app.Topology
+        Any object whose ``atoms()`` yields atoms carrying ``.element.symbol``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(N,)`` radii in ångström, ordered to match a positions array.
+
+    Warns
+    -----
+    RuntimeWarning
+        Once per element symbol missing from the Bondi table, which then falls
+        back to :data:`_DEFAULT_VDW`.
+    """
+    radii = []
+    for atom in topology.atoms():
+        symbol = atom.element.symbol
+        radius = _BONDI_VDW_RADII.get(symbol)
+        if radius is None:
+            radius = _DEFAULT_VDW
+            if symbol not in _WARNED_ELEMENTS:
+                _WARNED_ELEMENTS.add(symbol)
+                warnings.warn(
+                    f"Unknown element {symbol!r} - using fallback "
+                    f"vdW = {_DEFAULT_VDW} Å",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        radii.append(radius)
+    return np.array(radii, dtype=float)
+
+
 class Excluder:
     """
     SAS-style point-vs-protein membership test.
@@ -228,26 +274,9 @@ class Excluder:
         smaller values are more permissive (allows tighter fits).
     """
 
-    # Process-wide: one warning per unknown element symbol.
-    _warned: set[str] = set()
-
     def __init__(self, complex_obj, probe: float = 1.4):
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
-        radii = np.empty(len(positions), dtype=float)
-        for i, atom in enumerate(complex_obj.topology.atoms()):
-            sym = atom.element.symbol
-            r = _BONDI_VDW_RADII.get(sym)
-            if r is None:
-                r = _DEFAULT_VDW
-                if sym not in Excluder._warned:
-                    Excluder._warned.add(sym)
-                    warnings.warn(
-                        f"Unknown element {sym!r} - using fallback "
-                        f"vdW = {_DEFAULT_VDW} Å",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-            radii[i] = r
+        radii = _vdw_radii(complex_obj.topology)
         self._positions = positions
         self._inflated = radii + probe
         self._max_inflated = float(self._inflated.max())
@@ -261,6 +290,110 @@ class Excluder:
         diffs = self._positions[idx] - np.asarray(point)
         dists2 = (diffs**2).sum(axis=1)
         return bool((dists2 > self._inflated[idx] ** 2).all())
+
+
+class ClashFilter:
+    """
+    Steric test on the atoms a pose actually puts down.
+
+    :class:`Excluder` answers a question about a *point*: could a water-sized
+    probe sit here? What a pose puts at that point is a whole strand — tens of
+    atoms spanning several ångström — so a point can pass that test while the
+    atoms placed there sit inside the target. This class tests those atoms.
+
+    Decision rule
+    -------------
+    The complex is split in two by `element`: the atoms of the strand being
+    placed, which move, and everything else, which is the docking target and
+    does not. A pose is rejected when any moving atom *i* and any rigid atom
+    *j* are closer than their van der Waals spheres allow:
+
+        ``dist(i, j) < vdW(i) + vdW(j) - tolerance``
+
+    Pairs within the strand are not tested. A torsion cannot pull the strand
+    through itself, and the force field already resists a self-overlap; the
+    thing being rejected here is a strand pushed into the target.
+
+    Radii come from the Bondi (1964) table at the top of this module.
+
+    Parameters
+    ----------
+    complex_obj
+        Anything with ``.positions`` (openmm Quantity, Å-convertible, shape
+        ``(N, 3)``) and ``.topology.atoms()``. The rigid atoms' coordinates
+        are read once, here, so the target must not move afterwards.
+    element : sequence of int
+        ``[start, bond, end]`` atom indices of the strand being placed, with
+        ``end`` exclusive. ``bond`` is ignored.
+    tolerance : float, default=1.0
+        How far two atoms may overlap their van der Waals spheres before the
+        pose is rejected, in ångström. Some overlap has to be allowed: a
+        hydrogen bond puts a hydrogen roughly 0.8 Å inside the summed radii,
+        so a tolerance below that rejects poses that are bound, not clashing.
+        Raising it further admits harder contacts.
+
+    Raises
+    ------
+    ValueError
+        If `tolerance` is negative.
+
+    See Also
+    --------
+    Excluder : The point test this complements.
+    maws.complex.Complex.place_global : Puts the strand down for this to judge.
+
+    Examples
+    --------
+    Reject a pose, draw another, and keep the first that clears the target.
+
+    >>> clash = ClashFilter(complex, chain.element)  # doctest: +SKIP
+    >>> pose = sampler.generator()  # doctest: +SKIP
+    >>> clash.is_clear(nostrom(complex.positions))  # doctest: +SKIP
+    False
+    """
+
+    def __init__(self, complex_obj, element, *, tolerance: float = 1.0):
+        if tolerance < 0:
+            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+
+        radii = _vdw_radii(complex_obj.topology)
+        positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
+        self._start, self._end = element[0], element[2]
+
+        rigid = np.ones(len(positions), dtype=bool)
+        rigid[self._start : self._end] = False
+        self._rigid_positions = positions[rigid]
+        self._rigid_radii = radii[rigid]
+        self._moving_radii = radii[self._start : self._end]
+        self._tolerance = tolerance
+        self._tree = KDTree(self._rigid_positions)
+        self._reach = float(
+            self._rigid_radii.max() + self._moving_radii.max() - tolerance
+        )
+
+    def is_clear(self, positions: np.ndarray) -> bool:
+        """Return True when no atom of the strand overlaps the target.
+
+        Parameters
+        ----------
+        positions : numpy.ndarray
+            Shape ``(N, 3)`` coordinates of the whole complex in ångström,
+            unitless. Only the rows `element` covers are read.
+
+        Returns
+        -------
+        bool
+            True when the pose is worth costing an energy evaluation.
+        """
+        moving = np.asarray(positions, dtype=float)[self._start : self._end]
+        for k, near in enumerate(self._tree.query_ball_point(moving, self._reach)):
+            if not near:
+                continue
+            gap = np.linalg.norm(self._rigid_positions[near] - moving[k], axis=1)
+            limit = self._rigid_radii[near] + self._moving_radii[k] - self._tolerance
+            if (gap < limit).any():
+                return False
+        return True
 
 
 def compute_envelope_dims(complex_obj, reach: float) -> dict:
@@ -288,6 +421,98 @@ def compute_envelope_dims(complex_obj, reach: float) -> dict:
 
 class SamplingError(RuntimeError):
     """Raised when SurfaceSampler cannot find a clear point in max_rejections tries."""
+
+
+def draw_clear_conformation(
+    complex_obj,
+    chain,
+    sampler,
+    rotations,
+    clash: ClashFilter,
+    *,
+    residue: int = 0,
+    max_rejections: int = 1000,
+) -> Sample:
+    """draw_clear_conformation(complex_obj, chain, sampler, rotations, clash, *,
+    residue=0, max_rejections=1000)
+
+    Draw whole conformations until one sits clear of the target.
+
+    One attempt puts the strand at a drawn pose, bends one residue by a drawn
+    set of torsion angles, and asks `clash` whether the result touches the
+    target. A rejected attempt is neither scored nor counted, and the strand
+    is returned to where it started before the next one, so only a single
+    draw is accepted.
+
+    Both steps have to happen before the test. Placing a strand clear of the
+    target does not keep it clear: the torsions that follow swing atoms
+    several ångström, far enough to reach back into it.
+
+    Parameters
+    ----------
+    complex_obj : maws.complex.Complex
+        Holds both the strand and the target. Left holding the accepted
+        conformation.
+    chain : maws.chain.Chain
+        The strand being placed and bent.
+    sampler
+        Draws the pose. Any object with ``.generator() -> Sample``
+        (built-in: :class:`SurfaceSampler`).
+    rotations : NAngles
+        Draws one torsion angle per rotatable backbone bond, in radians.
+    clash : ClashFilter
+        Built for the same `complex_obj` and ``chain.element``.
+    residue : int, default=0
+        Which residue of `chain` the torsions are applied to. The default is
+        the only residue of a one-nucleotide strand.
+    max_rejections : int, default=1000
+        Hard cap on consecutive rejected attempts before giving up.
+
+    Returns
+    -------
+    Sample
+        The pose that was accepted. `complex_obj` already holds it.
+
+    Raises
+    ------
+    SamplingError
+        If nothing clears the target within `max_rejections` attempts.
+
+    See Also
+    --------
+    ClashFilter : Makes the accept/reject decision.
+    maws.complex.Complex.place_global : Puts the strand down.
+
+    Examples
+    --------
+    >>> clash = ClashFilter(complex, chain.element)  # doctest: +SKIP
+    >>> pose = draw_clear_conformation(  # doctest: +SKIP
+    ...     complex, chain, sampler, NAngles(4), clash
+    ... )
+    """
+    start = complex_obj.positions[:]
+    for _ in range(max_rejections):
+        complex_obj.positions = start[:]
+
+        pose = sampler.generator()
+        complex_obj.place_global(
+            chain.element,
+            pose.position * unit.angstrom,
+            pose.axis * unit.angstrom,
+            pose.angle,
+        )
+        for torsion, angle in enumerate(rotations.generator()):
+            chain.rotate_in_residue(residue, torsion, angle)
+
+        if clash.is_clear(nostrom(complex_obj.positions)):
+            return pose
+
+    complex_obj.positions = start[:]
+    raise SamplingError(
+        f"Could not fit the strand against the target in {max_rejections} "
+        f"attempts. The sampling region may sit inside the target - increase "
+        f"--reach, or raise the clash tolerance."
+    )
 
 
 @dataclass

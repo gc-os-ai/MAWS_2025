@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from openmm import app, unit
+from openmm import app
 
 import maws.space as space
 from maws.complex import Complex
@@ -60,6 +60,7 @@ class MawsRunner:
         verbose: bool = False,
         reach: float = 10.0,
         probe: float = 1.4,
+        clash_tolerance: float = 1.0,
         salt_conc: float = 0.15,
     ) -> None:
         if num_nucleotides <= 0:
@@ -72,6 +73,8 @@ class MawsRunner:
             raise ValueError(f"reach must be >= 0, got {reach}")
         if probe < 0:
             raise ValueError(f"probe must be >= 0, got {probe}")
+        if clash_tolerance < 0:
+            raise ValueError(f"clash_tolerance must be >= 0, got {clash_tolerance}")
         if salt_conc < 0:
             raise ValueError(f"salt_conc must be >= 0, got {salt_conc}")
 
@@ -88,6 +91,7 @@ class MawsRunner:
         self.verbose = verbose
         self.reach = reach
         self.probe = probe
+        self.clash_tolerance = clash_tolerance
         self.salt_conc = salt_conc
 
     def run(
@@ -235,20 +239,12 @@ class MawsRunner:
             cx.build()
 
             positions0 = cx.positions[:]
+            clash = space.ClashFilter(
+                cx, aptamer.element, tolerance=self.clash_tolerance
+            )
 
             for _ in range(self.first_chunk_size):
-                pose = sampler.generator()
-                rotation = rotations.generator()
-
-                cx.place_global(
-                    aptamer.element,
-                    pose.position * unit.angstrom,
-                    pose.axis * unit.angstrom,
-                    pose.angle,
-                )
-
-                for j in range(N_BACKBONE_TORSIONS):
-                    aptamer.rotate_in_residue(0, j, rotation[j])
+                space.draw_clear_conformation(cx, aptamer, sampler, rotations, clash)
 
                 energy = cx.get_energy()[0]
                 if free_E is None or energy < free_E:

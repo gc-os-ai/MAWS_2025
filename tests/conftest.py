@@ -89,6 +89,24 @@ def synthetic_two_carbon_complex():
 
 
 @pytest.fixture
+def synthetic_docking_complex():
+    """Two C atoms that move (indices 0-1) and two that do not (2-3).
+
+    The moving pair starts far away from the rigid pair, so the fixture itself
+    is clash-free and each test can move it wherever it needs.
+    """
+    return SyntheticComplex(
+        positions_angstrom=[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [50.0, 0.0, 0.0],
+            [51.0, 0.0, 0.0],
+        ],
+        symbols=["C"] * 4,
+    )
+
+
+@pytest.fixture
 def synthetic_octahedron_complex():
     """Six C atoms in a unit-axis octahedron at distance 5 Å from origin."""
     return SyntheticComplex(

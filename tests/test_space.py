@@ -221,6 +221,275 @@ class TestExcluder:
         assert _DEFAULT_VDW == 1.70
 
 
+class TestClashFilter:
+    """Tests for ClashFilter, the check on the atoms that actually get placed.
+
+    The sampler's own filter asks whether a water-sized probe could sit at the
+    sampled point. What gets placed there is a whole nucleotide, so a point
+    can pass that check while the atoms put there overlap the target. This
+    filter is the check on those atoms.
+
+    Every atom in the fixture is carbon, Bondi radius 1.70 A. A moving atom
+    and a rigid atom therefore count as clashing once they are closer than
+    ``1.70 + 1.70 - tolerance``.
+
+    See issue #48.
+    """
+
+    ELEMENT = [0, 1, 2]  # atoms 0-1 move, everything from index 2 is rigid
+
+    @staticmethod
+    def moved(x):
+        """Return full positions with the moving pair starting at ``x`` on the x-axis.
+
+        The two rigid atoms stay at x = 50 and x = 51, so the closest
+        moving-rigid pair is atom 1 at ``x + 1`` against the rigid atom at 50.
+        """
+        return np.array(
+            [[x, 0.0, 0.0], [x + 1.0, 0.0, 0.0], [50.0, 0.0, 0.0], [51.0, 0.0, 0.0]]
+        )
+
+    def test_clear_when_far_apart(self, synthetic_docking_complex):
+        """A strand placed far from the target is accepted."""
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT)
+        assert f.is_clear(self.moved(0.0))
+
+    def test_blocked_when_placed_on_top_of_a_rigid_atom(
+        self, synthetic_docking_complex
+    ):
+        """A strand sharing coordinates with a target atom is rejected.
+
+        This is the case the energy blow-ups come from: two atoms at the same
+        place give a potential energy many orders of magnitude above a real
+        pose, and that pose then wins on the selection score.
+        """
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT)
+        assert not f.is_clear(self.moved(50.0))
+
+    def test_the_cut_is_the_summed_radii_less_the_tolerance(
+        self, synthetic_docking_complex
+    ):
+        """Two carbons are rejected below 3.00 A and accepted above it.
+
+        Both radii are 1.70 A and the tolerance is 0.4 A, so the cut sits at
+        1.70 + 1.70 - 0.4 = 3.00 A. Testing either side of it pins down that
+        the filter compares against summed radii rather than a flat distance.
+        """
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=0.4)
+        assert not f.is_clear(self.moved(46.1))  # atom 1 is 2.9 A away
+        assert f.is_clear(self.moved(45.9))  # atom 1 is 3.1 A away
+
+    def test_a_larger_tolerance_accepts_a_closer_contact(
+        self, synthetic_docking_complex
+    ):
+        """Raising the tolerance lets through a contact a lower one rejects.
+
+        The tolerance is how far two atoms may overlap before the pose is
+        thrown away. Real complexes need some overlap allowed: a hydrogen bond
+        puts a hydrogen about 0.8 A inside the summed radii.
+        """
+        from maws.space import ClashFilter
+
+        strict = ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=0.4)
+        loose = ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=1.5)
+        assert not strict.is_clear(self.moved(46.1))
+        assert loose.is_clear(self.moved(46.1))
+
+    def test_two_rigid_atoms_overlapping_is_not_a_clash(
+        self, synthetic_docking_complex
+    ):
+        """Only the moving atoms are tested, so the target's own geometry passes.
+
+        The target comes from the input PDB and cannot be redrawn. Judging it
+        would reject every pose in the run rather than the bad ones.
+        """
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT)
+        positions = self.moved(0.0)
+        positions[3] = positions[2]
+        assert f.is_clear(positions)
+
+    def test_rejects_negative_tolerance(self, synthetic_docking_complex):
+        """A negative tolerance raises, rather than silently widening the cut.
+
+        It would mean demanding a gap between the strand and the target that
+        no bound pose can satisfy, so it is always a mistake.
+        """
+        import pytest
+
+        from maws.space import ClashFilter
+
+        with pytest.raises(ValueError, match="tolerance"):
+            ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=-1.0)
+
+
+class _StubSampler:
+    """Draws the same pose every time and counts how often it was asked."""
+
+    def __init__(self):
+        self.draws = 0
+
+    def generator(self):
+        from maws.space import Sample
+
+        self.draws += 1
+        return Sample(position=np.zeros(3), axis=np.array([0.0, 0.0, 1.0]), angle=0.0)
+
+
+class _StubRotations:
+    """Stands in for NAngles, handing back a fixed set of torsion angles."""
+
+    def __init__(self, n=4):
+        self.n = n
+
+    def generator(self):
+        return np.zeros(self.n)
+
+
+class _StubChain:
+    """Records the torsions applied to it. ``element`` covers atoms 0-1."""
+
+    element = [0, 1, 2]
+
+    def __init__(self):
+        self.bends = 0
+
+    def rotate_in_residue(self, residue, torsion, angle):
+        self.bends += 1
+
+
+class _StubComplex:
+    """Moves atom 0 one A along x each time it is placed.
+
+    ``offsets`` records where atom 0 sat at the start of every attempt, which
+    is how a test sees whether the strand was reset between attempts.
+    """
+
+    def __init__(self):
+        import openmm as mm
+        from openmm import unit as ommunit
+
+        self._mm = mm
+        self._unit = ommunit
+        self.positions = [mm.Vec3(0.0, 0.0, 0.0)] * 3 * ommunit.angstrom
+        self.offsets = []
+
+    def place_global(self, element, position, axis, angle):
+        from maws.helpers import nostrom
+
+        self.offsets.append(float(np.asarray(nostrom(self.positions))[0][0]))
+        moved = self.positions[:]
+        moved[0] += self._mm.Vec3(1.0, 0.0, 0.0) * self._unit.angstrom
+        self.positions = moved
+
+
+class _StubClash:
+    """Rejects the first `rejections` conformations, then accepts everything.
+
+    ``bends_at_check`` records how many torsions had been applied by the time
+    each decision was made, which is how a test sees the order of operations.
+    """
+
+    def __init__(self, rejections, chain=None):
+        self.rejections = rejections
+        self.chain = chain
+        self.bends_at_check = []
+
+    def is_clear(self, positions):
+        if self.chain is not None:
+            self.bends_at_check.append(self.chain.bends)
+        if self.rejections:
+            self.rejections -= 1
+            return False
+        return True
+
+
+class TestDrawClearConformation:
+    """Tests for draw_clear_conformation, the reject-and-redraw loop.
+
+    See issue #48.
+    """
+
+    def test_a_clear_conformation_is_returned_on_the_first_draw(self):
+        """Nothing is redrawn when the first attempt already clears the target."""
+        from maws.space import draw_clear_conformation
+
+        sampler = _StubSampler()
+        draw_clear_conformation(
+            _StubComplex(), _StubChain(), sampler, _StubRotations(), _StubClash(0)
+        )
+        assert sampler.draws == 1
+
+    def test_a_rejected_conformation_is_drawn_again(self):
+        """Each rejection costs one more pose and one more set of torsions.
+
+        A rejected attempt must not be scored, and must not be retried
+        unchanged, or the loop would either keep the clash or never end.
+        """
+        from maws.space import draw_clear_conformation
+
+        sampler, chain, rotations = _StubSampler(), _StubChain(), _StubRotations(4)
+        draw_clear_conformation(
+            _StubComplex(), chain, sampler, rotations, _StubClash(3)
+        )
+        assert sampler.draws == 4
+        assert chain.bends == 4 * 4
+
+    def test_the_strand_is_reset_before_each_attempt(self):
+        """Every attempt starts from the coordinates the strand came in with.
+
+        Without the reset each attempt would build on the rejected one before
+        it, so the accepted conformation would be a composition of failures
+        rather than the single draw the sampler reports.
+        """
+        from maws.space import draw_clear_conformation
+
+        cx = _StubComplex()
+        draw_clear_conformation(
+            cx, _StubChain(), _StubSampler(), _StubRotations(), _StubClash(3)
+        )
+        assert cx.offsets == [0.0, 0.0, 0.0, 0.0]
+
+    def test_the_torsions_are_applied_before_the_clash_check(self):
+        """The check sees the bent strand, not the freshly placed one.
+
+        Placing a strand clear of the target does not keep it clear: the
+        torsions swing atoms far enough to reach back into it, so a check made
+        before them would pass conformations that clash.
+        """
+        from maws.space import draw_clear_conformation
+
+        chain = _StubChain()
+        clash = _StubClash(0, chain=chain)
+        draw_clear_conformation(
+            _StubComplex(), chain, _StubSampler(), _StubRotations(4), clash
+        )
+        assert clash.bends_at_check == [4]
+
+    def test_giving_up_raises(self):
+        """A target nothing can clear fails loudly instead of looping forever."""
+        import pytest
+
+        from maws.space import SamplingError, draw_clear_conformation
+
+        with pytest.raises(SamplingError, match="attempts"):
+            draw_clear_conformation(
+                _StubComplex(),
+                _StubChain(),
+                _StubSampler(),
+                _StubRotations(),
+                _StubClash(999),
+                max_rejections=5,
+            )
+
+
 class TestComputeEnvelopeDims:
     def test_sphere_dims_octahedron(self, synthetic_octahedron_complex):
         from maws.space import compute_envelope_dims
