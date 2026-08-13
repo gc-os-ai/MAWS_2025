@@ -272,14 +272,16 @@ class TestPoseTranslate:
 class TestPosePlace:
     """Putting a whole chain somewhere a sampler proposed."""
 
-    def test_the_chain_is_slid_first_and_then_turned_about_its_first_atom(
-        self, two_chains
-    ):
-        """A shift of 10 along x, then a quarter turn about z through the new corner.
+    def test_the_middle_of_the_chain_lands_on_the_requested_position(self, two_chains):
+        """Where the chain is asked to go is where the middle of it ends up.
 
-        Atom 0 lands at ``[10, 0, 0]`` and stays there, because the turn is
-        centred on it. Atom 1 sat one step along x from it and ends one step
-        along y; atom 2 sat one step along y and ends one step back along x.
+        A sampler proposes a position inside the region it was given, so that
+        the chain it places is somewhere sensible against the target. Reading
+        that position as the middle of the chain is what makes the proposal
+        mean what it says: an atom of a nucleotide sits several ångström from
+        the middle of one, so treating the position as the place for the first
+        atom instead would leave the chain off by that much, by a different
+        amount for every angle drawn.
         """
         placement = Placement(
             position=np.array([10.0, 0, 0]),
@@ -288,10 +290,27 @@ class TestPosePlace:
         )
         placed = two_chains.place(FIRST_CHAIN, placement)
         np.testing.assert_allclose(
-            placed.atoms(FIRST_CHAIN),
-            [[10.0, 0, 0], [10.0, 1, 0], [9.0, 0, 0]],
-            atol=1e-12,
+            placed.centroid(FIRST_CHAIN), [10.0, 0, 0], atol=1e-12
         )
+
+    def test_the_chain_is_turned_about_its_own_middle(self, two_chains):
+        """A quarter turn about z takes each atom's offset from x round to y.
+
+        The offsets are measured from the middle of the chain both before and
+        after, so this says the turn happened about that middle and nothing
+        else: an atom that sat one step along x from the middle ends one step
+        along y from it.
+        """
+        placement = Placement(
+            position=np.array([10.0, 0, 0]),
+            axis=np.array([0.0, 0, 1]),
+            angle=np.pi / 2,
+        )
+        placed = two_chains.place(FIRST_CHAIN, placement)
+        before = two_chains.atoms(FIRST_CHAIN) - two_chains.centroid(FIRST_CHAIN)
+        after = placed.atoms(FIRST_CHAIN) - placed.centroid(FIRST_CHAIN)
+        np.testing.assert_allclose(after[:, 0], -before[:, 1], atol=1e-12)
+        np.testing.assert_allclose(after[:, 1], before[:, 0], atol=1e-12)
 
     def test_every_other_chain_stays_exactly_where_it_was(self, two_chains):
         """Placing one chain is not allowed to disturb the rest of the design."""
@@ -575,7 +594,17 @@ class TestResidueViewTorsions:
         assert len(self._residue().torsions(limit=10)) == 4
 
     def test_the_direction_is_passed_on_to_every_bond(self):
-        """One direction argument covers the whole set."""
+        """One direction argument covers the whole set.
+
+        Read towards the 5' end, the first of the four bonds has only the
+        strand's own first atom left to move, and that atom is one of the two
+        the bond's axis runs through, so it is left out. The three that remain
+        are the same physical bonds as the last three read towards the 3' end:
+        the same pair of atoms each time, whichever way round the pair is
+        written.
+        """
         forwards = self._residue().torsions()
         backwards = self._residue().torsions("5prime")
-        assert all(f.pivot == b.bond for f, b in zip(forwards, backwards, strict=True))
+        assert [{b.pivot, b.bond} for b in backwards] == [
+            {f.pivot, f.bond} for f in forwards[1:]
+        ]

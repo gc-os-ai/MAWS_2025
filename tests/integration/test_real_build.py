@@ -167,8 +167,14 @@ class TestRealGrowth:
 
         Rebuilding must therefore put the existing atoms back exactly, not
         merely close by.
+
+        "Existing" is not quite the whole residue. A lone guanine is capped at
+        both ends; once a second nucleotide is joined to its 3' end, the cap
+        there is gone and the residue has one atom fewer. The atoms the two
+        builds have in common are the ones checked, and how many that is comes
+        from the residue tables rather than being assumed here.
         """
-        from maws.regrow import grow_chain
+        from maws.regrow import common_window, grow_chain
 
         system = leap_builder.build(Assembly().with_aptamer(rna(), "G"), forcefield)
         grown = grow_chain(
@@ -179,8 +185,12 @@ class TestRealGrowth:
             direction="3prime",
             builder=leap_builder,
         )
-        kept = len(system.chain("aptamer").span)
-        np.testing.assert_array_equal(grown.pose.xyz[:kept], system.pose.xyz[:kept])
+        old_residue = system.chain("aptamer").residue(0)
+        new_residue = grown.system.chain("aptamer").residue(0)
+        fresh, kept = common_window(new_residue.span, old_residue.span, align="start")
+        np.testing.assert_array_equal(
+            grown.pose.xyz[fresh.as_slice()], system.pose.xyz[kept.as_slice()]
+        )
 
     def test_the_new_residue_is_joined_at_a_sensible_distance(
         self, leap_builder, forcefield

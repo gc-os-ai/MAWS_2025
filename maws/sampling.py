@@ -236,6 +236,12 @@ class TorsionAngles:
     >>> drawn = angles.sample()
     >>> drawn.shape, bool(((0 <= drawn) & (drawn < 2 * np.pi)).all())
     ((4,), True)
+
+    A residue near the end of a strand can have fewer bonds worth turning than
+    the setting asks for, so the count can be overridden per draw:
+
+    >>> angles.sample(2).shape
+    (2,)
     """
 
     n: int
@@ -245,15 +251,31 @@ class TorsionAngles:
         if self.n < 0:
             raise ConfigurationError(f"n must not be negative, got {self.n}")
 
-    def sample(self) -> np.ndarray:
-        """Return `n` angles drawn evenly from a full turn.
+    def sample(self, n: int | None = None) -> np.ndarray:
+        """Return angles drawn evenly from a full turn.
+
+        Parameters
+        ----------
+        n : int, optional
+            How many angles to draw. Defaults to :attr:`n`. Pass the number of
+            bonds actually being turned when that is smaller, which happens
+            when some of a residue's bonds turn out to move nothing and are
+            left out.
 
         Returns
         -------
         numpy.ndarray
             Shape ``(n,)``, each between 0 and 2π radians.
+
+        Raises
+        ------
+        maws.errors.ConfigurationError
+            If `n` is negative.
         """
-        return self.rng.uniform(0.0, 2.0 * np.pi, self.n)
+        count = self.n if n is None else n
+        if count < 0:
+            raise ConfigurationError(f"n must not be negative, got {count}")
+        return self.rng.uniform(0.0, 2.0 * np.pi, count)
 
 
 # ---------------------------------------------------------------------------

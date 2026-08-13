@@ -24,6 +24,7 @@ from maws.search import (
     SearchFinished,
     StepCompleted,
     StepStarted,
+    _growth_torsions,
     grow_aptamer,
     stub_energy,
 )
@@ -315,6 +316,81 @@ class TestStopping:
 
         assert not any(isinstance(e, SearchFinished) for e in seen)
         assert len(seen[-1].winner.sequence) == 2
+
+
+class TestDegreesOfFreedom:
+    """Which bonds a step is allowed to turn, once the strand has grown.
+
+    The private helper is used directly because this is the one place where
+    the two ends of the strand can be compared side by side. Going through a
+    whole search would only show the consequence — one end winning more often
+    than it should — with no way to say why.
+    """
+
+    def _grown(self, builder, direction):
+        """Return a three-nucleotide strand grown once more at one end.
+
+        Parameters
+        ----------
+        builder : maws.build.Builder
+            What builds the structures.
+        direction : {"3prime", "5prime"}
+            Which end to add the fourth nucleotide at.
+
+        Returns
+        -------
+        maws.pose.ChainView
+            The strand after growing, ready to be asked for its bonds.
+        """
+        system = builder.build(
+            Assembly().with_aptamer(rna(), "G A U"),
+            ForceField.for_target("RNA", "protein"),
+        )
+        grown = grow_chain(
+            system,
+            system.pose,
+            role="aptamer",
+            token="C",
+            direction=direction,
+            builder=builder,
+        )
+        return grown.system.chain("aptamer")
+
+    @pytest.mark.parametrize("direction", ["3prime", "5prime"])
+    def test_a_step_gets_as_many_bonds_as_it_asked_for(self, builder, direction):
+        """Asking for four bonds to turn gives four, at either end."""
+        chain = self._grown(builder, direction)
+        assert len(_growth_torsions(chain, direction, 4)) == 4
+
+    @pytest.mark.parametrize("direction", ["3prime", "5prime"])
+    def test_every_bond_a_step_turns_moves_the_new_residue(self, builder, direction):
+        """No bond may leave the new residue alone.
+
+        The residue just added is the only thing this step is placing. A bond
+        that does not move any of its atoms spends one of the step's random
+        angles on shuffling the part of the strand that was already settled
+        against the target.
+        """
+        chain = self._grown(builder, direction)
+        newest = chain.residue(-1 if direction == "3prime" else 0)
+        atoms = set(newest.span)
+        for torsion in _growth_torsions(chain, direction, 4):
+            assert atoms & set(torsion.moving), (
+                f"bond {torsion.pivot}-{torsion.bond} moves nothing of the "
+                f"residue just added at the {direction} end"
+            )
+
+    def test_both_ends_are_offered_the_same_number_of_bonds(self, builder):
+        """Neither end may be handed fewer bonds to turn than the other.
+
+        The search decides which end to grow at by comparing the scores the two
+        produce. An end offered fewer bonds would try a smaller set of shapes,
+        find a worse best one, and lose that comparison for a reason that has
+        nothing to do with the molecule.
+        """
+        three = len(_growth_torsions(self._grown(builder, "3prime"), "3prime", 4))
+        five = len(_growth_torsions(self._grown(builder, "5prime"), "5prime", 4))
+        assert three == five
 
 
 class TestRejectedArguments:

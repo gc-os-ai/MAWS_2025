@@ -89,6 +89,9 @@ docstring-code-format = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "maws"]
+# Puts tests/ on the import path, so a helper module such as tests/bond_checks.py
+# can be imported by name from any tier of the suite.
+pythonpath = ["tests"]
 # --doctest-modules runs every Examples block in the package as a test, so a
 # docstring that shows output the code no longer produces fails the build.
 # Integration tests need AmberTools and OpenMM, so they are excluded here and

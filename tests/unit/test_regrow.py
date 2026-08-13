@@ -140,6 +140,10 @@ class TestSplice:
     def _splice(self, **overrides) -> Pose:
         """Fit :meth:`_fresh` onto :meth:`_old`, with any argument replaced.
 
+        The strand here is one residue that grew into two. Its one old residue
+        is the three atoms at the front of both structures, so there is a
+        single entry in `matches` and the fit is computed from it.
+
         Parameters
         ----------
         **overrides
@@ -152,8 +156,8 @@ class TestSplice:
         """
         arguments = {
             "fresh_chain": AtomRange(0, 6),
-            "fresh_kept": AtomRange(0, 3),
-            "old_kept": AtomRange(0, 3),
+            "matches": [(AtomRange(0, 3), AtomRange(0, 3))],
+            "anchor": 0,
             "others": [(AtomRange(6, 8), AtomRange(3, 5))],
         }
         arguments.update(overrides)
@@ -197,17 +201,47 @@ class TestSplice:
     @pytest.mark.parametrize("n_kept", [0, 1, 2])
     def test_too_few_kept_atoms_leaves_the_fresh_positions_alone(self, n_kept):
         """With no orientation to fit, the build is used exactly as it came."""
-        spliced = self._splice(
-            fresh_kept=AtomRange(0, n_kept), old_kept=AtomRange(0, n_kept)
-        )
+        spliced = self._splice(matches=[(AtomRange(0, n_kept), AtomRange(0, n_kept))])
         np.testing.assert_array_equal(spliced.xyz[0:6], self._fresh().xyz[0:6])
 
     def test_a_chain_that_did_not_grow_is_copied_even_with_nothing_kept(self):
         """The other chains are placed whether or not a fit happens."""
-        spliced = self._splice(fresh_kept=AtomRange(0, 0), old_kept=AtomRange(0, 0))
+        spliced = self._splice(matches=[(AtomRange(0, 0), AtomRange(0, 0))])
         np.testing.assert_array_equal(spliced.xyz[6:8], self._old().xyz[3:5])
 
+    def test_an_empty_strand_has_nothing_to_fit_onto(self):
+        """The first residue of a run is placed by the sampler, not by a fit.
+
+        There is no earlier shape to keep, which the caller signals with an
+        anchor of -1, so the fresh build is left exactly as it came.
+        """
+        spliced = self._splice(matches=[], anchor=-1)
+        np.testing.assert_array_equal(spliced.xyz[0:6], self._fresh().xyz[0:6])
+
+    def test_only_the_anchor_residue_decides_where_the_new_one_goes(self):
+        """Residues further from the join are copied back, but do not steer the fit.
+
+        A fresh build comes out fully extended while the shape being kept has
+        been folded, so no single turn and shift carries the whole strand onto
+        it. Fitting from the neighbouring residue alone keeps the new residue
+        correctly joined; fitting from all of them would smear that error over
+        the one atom group being positioned.
+
+        The second entry here is deliberately mismatched — its old positions
+        are nowhere near its fresh ones — and the answer must not change.
+        """
+        with_distraction = self._splice(
+            matches=[
+                (AtomRange(0, 3), AtomRange(0, 3)),
+                (AtomRange(3, 5), AtomRange(3, 5)),
+            ],
+            anchor=0,
+        )
+        np.testing.assert_allclose(
+            with_distraction.xyz[5], self._splice().xyz[5], atol=1e-12
+        )
+
     def test_the_kept_part_must_be_the_same_size_in_both_structures(self):
-        """Different counts mean the two runs are not the same atoms."""
-        with pytest.raises(ConfigurationError, match="same size in both"):
-            self._splice(fresh_kept=AtomRange(0, 3), old_kept=AtomRange(0, 2))
+        """Different counts mean the two spans are not the same atoms."""
+        with pytest.raises(ConfigurationError, match="must name the same atoms"):
+            self._splice(matches=[(AtomRange(0, 3), AtomRange(0, 2))])

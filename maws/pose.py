@@ -76,7 +76,7 @@ if TYPE_CHECKING:  # pragma: no cover - needed by type checkers only
 
     from maws.sampling import Placement
 
-__all__ = ["ChainView", "Pose", "ResidueView", "rodrigues"]
+__all__ = ["ChainView", "Pose", "ResidueView", "moves_atoms_off_axis", "rodrigues"]
 
 
 def rodrigues(axis: np.ndarray, angle: float) -> np.ndarray:
@@ -436,22 +436,39 @@ class Pose:
 
         Notes
         -----
-        The chain is first slid by ``placement.position``, then turned by
-        ``placement.angle`` about ``placement.axis``. The turn is centred on
-        the chain's first atom, so the slide decides roughly where the chain
-        sits and the turn decides which way it faces.
+        The chain ends up with its centre exactly at ``placement.position``,
+        turned by ``placement.angle`` about ``placement.axis``. Both the turn
+        and the move are about that same centre, so the two are independent:
+        changing the angle does not change where the chain sits, and changing
+        the position does not change which way it faces.
+
+        Centring both on the chain's own middle is what makes the sampled point
+        mean what it says. Sliding the chain *by* the sampled point instead
+        would leave it offset by however far it happened to sit from the
+        origin, and turning it about one end would move it again.
+
+        Examples
+        --------
+        A chain put at a given point ends up centred there, whatever angle it
+        is turned through.
+
+        >>> import numpy as np
+        >>> from maws.sampling import Placement
+        >>> from maws.values import AtomRange
+        >>> pose = Pose(np.array([[10.0, 10, 10], [11.0, 10, 10]]))
+        >>> where = Placement(np.zeros(3), np.array([0.0, 0, 1]), 1.234)
+        >>> np.round(pose.place(AtomRange(0, 2), where).centroid(), 6)
+        array([0., 0., 0.])
 
         See Also
         --------
         maws.sampling.SurfaceSampler : Produces placements near a target.
         """
         span = _span_of(chain)
-        moved = self.translate(span, placement.position)
-        return moved.rotate_about(
-            span,
-            placement.axis,
-            placement.angle,
-            origin=moved.xyz[span.start],
+        centre = self.centroid(span)
+        turned = self.rotate_about(span, placement.axis, placement.angle, origin=centre)
+        return turned.translate(
+            span, np.asarray(placement.position, dtype=np.float64) - centre
         )
 
     def jittered(self, offsets: np.ndarray) -> Pose:
@@ -554,6 +571,40 @@ class Pose:
         from openmm import unit
 
         return cls(np.asarray(positions.value_in_unit(unit.angstrom)), system)
+
+
+def moves_atoms_off_axis(torsion: Torsion) -> bool:
+    """Say whether turning this bond can change anything.
+
+    Parameters
+    ----------
+    torsion : maws.values.Torsion
+        The bond to check.
+
+    Returns
+    -------
+    bool
+        False when every atom the torsion would move lies on its own rotation
+        axis, in which case turning it leaves all of them exactly where they
+        were.
+
+    Notes
+    -----
+    Only the two atoms defining the axis are certain to lie on it. Any other
+    moving atom might also happen to, but only by coincidence, and checking
+    positions would make the answer depend on the current shape rather than on
+    the structure. So this asks the question that has a fixed answer: does the
+    moving group contain anything besides the two axis atoms?
+
+    Examples
+    --------
+    >>> from maws.values import AtomRange, Torsion
+    >>> moves_atoms_off_axis(Torsion(0, 1, AtomRange(1, 5)))
+    True
+    >>> moves_atoms_off_axis(Torsion(1, 0, AtomRange(0, 1)))
+    False
+    """
+    return bool(set(torsion.moving) - {torsion.pivot, torsion.bond})
 
 
 def _span_of(target: AtomRange | ChainView) -> AtomRange:
@@ -820,7 +871,7 @@ class ResidueView:
     def torsions(
         self, direction: Direction = "3prime", *, limit: int | None = None
     ) -> tuple[Torsion, ...]:
-        """Return several of this residue's turnable bonds at once.
+        """Return this residue's turnable bonds, skipping any that do nothing.
 
         Handy for the standard loop, where the same set of bonds is turned to
         new random angles on every pass.
@@ -830,12 +881,25 @@ class ResidueView:
         direction : {"3prime", "5prime"}, default="3prime"
             Which side of each bond swings. See :meth:`torsion`.
         limit : int, optional
-            Return only the first this many bonds. Defaults to all of them.
+            Return at most this many bonds. Defaults to all of them.
 
         Returns
         -------
         tuple of maws.values.Torsion
-            The bonds, numbered from the start of the design.
+            The bonds, numbered from the start of the design. May be shorter
+            than `limit`, and shorter than :attr:`n_torsions`.
+
+        Notes
+        -----
+        A bond whose moving atoms all lie on its own axis is left out. Turning
+        one moves nothing, so including it would spend one of the search's
+        random angles on an operation that cannot change anything — and it
+        would do so in one direction only, which would quietly make growing at
+        one end of the strand explore less than growing at the other.
+
+        This happens at the ends of a strand, where the 5' reading of the first
+        bond has only the strand's own first atom to move, and that atom is one
+        of the two the axis runs through.
 
         Examples
         --------
@@ -848,6 +912,19 @@ class ResidueView:
         4
         >>> len(chain.residue(0).torsions(limit=3))
         3
+
+        Read towards the 5' end, the first bond of the first residue has
+        nothing left to move, so it is dropped:
+
+        >>> len(chain.residue(0).torsions("5prime"))
+        3
         """
-        count = self.n_torsions if limit is None else min(limit, self.n_torsions)
-        return tuple(self.torsion(i, direction) for i in range(count))
+        wanted = self.n_torsions if limit is None else limit
+        usable: list[Torsion] = []
+        for index in range(self.n_torsions):
+            if len(usable) == wanted:
+                break
+            torsion = self.torsion(index, direction)
+            if moves_atoms_off_axis(torsion):
+                usable.append(torsion)
+        return tuple(usable)

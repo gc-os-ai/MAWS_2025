@@ -552,7 +552,7 @@ def _seed_candidate(
     best_pose = grown.pose
     for placement in islice(sampler, n_samples):
         pose = grown.pose.place(chain, placement)
-        pose = pose.rotate_all(torsions, angles.sample())
+        pose = pose.rotate_all(torsions, angles.sample(len(torsions)))
         value = model.evaluate(pose)
         energies.append(value)
         if value < best_energy:
@@ -652,7 +652,7 @@ def _grow_candidate(
     best_energy = float("inf")
     best_pose = start
     for _ in range(n_samples):
-        pose = start.rotate_all(torsions, angles.sample())
+        pose = start.rotate_all(torsions, angles.sample(len(torsions)))
         value = model.evaluate(pose)
         energies.append(value)
         if value < best_energy:
@@ -686,7 +686,8 @@ def _growth_torsions(
     Returns
     -------
     tuple of maws.values.Torsion
-        The bonds to vary, in global atom indices.
+        The bonds to vary, in global atom indices. At most `n_torsions` of
+        them, and fewer only when the residue does not have that many.
 
     Notes
     -----
@@ -694,14 +695,16 @@ def _growth_torsions(
     bonds are chosen and oriented to leave it where it is and move only the new
     residue.
 
-    Adding at the 3' end puts the new residue last, so its own bonds swing it
-    while everything before it stays put, and the final bond comes from its
-    neighbour — that is the bond joining the two, and turning it swings the new
-    residue as a whole.
+    Both ends are treated the same way: at most ``n_torsions - 1`` bonds from
+    inside the new residue, which change its own shape, plus the one bond that
+    joins it to the residue it was added next to, which swings it as a whole.
+    That last bond belongs to the neighbour, not to the new residue, and it is
+    read in the direction that leaves the rest of the strand where it is.
 
-    Adding at the 5' end puts the new residue first. Its bonds are taken in the
-    5' direction instead, so that turning one swings the new residue rather
-    than the whole strand behind it.
+    Keeping the two ends matched matters because the search decides which end
+    to grow at by comparing the scores the two produce. An end offered fewer
+    bonds would try a smaller set of shapes, find a worse best one, and lose
+    that comparison for a reason that has nothing to do with the molecule.
     """
     if direction == "3prime":
         newest = chain.residue(-1)
@@ -711,4 +714,12 @@ def _growth_torsions(
             index = min(n_torsions - 1, neighbour.n_torsions - 1)
             torsions.append(neighbour.torsion(index, "3prime"))
         return tuple(torsions)
-    return chain.residue(0).torsions("5prime", limit=n_torsions)
+
+    newest = chain.residue(0)
+    torsions = list(newest.torsions("5prime", limit=n_torsions - 1))
+    if chain.n_residues > 1 and n_torsions > 1:
+        # The neighbour's first bond, read towards the 5' end, moves everything
+        # in front of it — which is exactly the new residue. It is the mirror
+        # image of the neighbour's last bond used above for the 3' end.
+        torsions.append(chain.residue(1).torsion(0, "5prime"))
+    return tuple(torsions)

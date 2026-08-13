@@ -302,6 +302,12 @@ class _TorsionTemplateBase:
         So "rotate the 5' side" is a second torsion about the same bond, not a
         flag on the first one. Its axis runs the other way, so that the same
         angle produces the same change in shape either way round.
+
+        .. warning::
+            The two sides are complementary only when the bond separates the
+            strand into exactly two pieces. That holds for a
+            :class:`BackboneTorsion` and not for a :class:`LocalTorsion`, which
+            overrides this.
         """
         bond = self.bond + offset
         return Torsion(
@@ -425,6 +431,40 @@ class LocalTorsion(_TorsionTemplateBase):
             bond=bond,
             moving=AtomRange(bond, self.stop + offset),
         )
+
+    def reversed(self, offset: int, chain: AtomRange) -> Torsion:
+        """Return the same torsion as :meth:`placed`.
+
+        Parameters
+        ----------
+        offset : int
+            Global index of the first atom of the residue this recipe belongs
+            to.
+        chain : AtomRange
+            Global span of the whole chain that residue sits in.
+
+        Returns
+        -------
+        Torsion
+            Exactly what :meth:`placed` returns.
+
+        Notes
+        -----
+        A bond only has two well-defined sides when cutting it would fall the
+        molecule into two pieces. This kind of bond does not: its moving atoms
+        stop at `stop`, and the atoms past `stop` are attached to the rest of
+        the residue by a second path. Turning "everything before the bond"
+        would move atoms on one side of that second path and not the other,
+        which stretches a bond and destroys the molecule.
+
+        So there is no 5' form to give, and the 3' form is returned instead.
+        That is the right answer for what the 5' form is asked for: growing the
+        strand at its 5' end, where the rest of the strand is already
+        positioned against the target and only the new residue should move.
+        This bond moves a group inside one residue whichever way it is read, so
+        it already leaves the rest of the strand alone.
+        """
+        return self.placed(offset, chain)
 
 
 TorsionTemplate = BackboneTorsion | LocalTorsion
