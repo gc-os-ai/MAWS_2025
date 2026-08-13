@@ -27,7 +27,7 @@ from bond_checks import assert_bonds_survive, bonds_from_topology
 
 from maws.build import LeapBuilder
 from maws.forcefield import ForceField
-from maws.libraries import rna
+from maws.libraries import dna, rna
 from maws.topology import Assembly
 
 pytestmark = pytest.mark.integration
@@ -94,6 +94,68 @@ class TestTheBondListIsUsable:
         from bond_checks import bond_lengths
 
         assert bond_lengths(strand.pose.xyz, bonds).max() < 2.0
+
+
+@needs_leap
+class TestTheTurnableBondsAreBonds:
+    """Every bond the residue tables declare has to be a bond in the molecule.
+
+    The tables give atom numbers counted from the start of a residue, worked
+    out by reading the order LEaP lays the atoms out in. A number that is off
+    by a few still names two atoms, and turning about the line between them
+    still produces a structure and an energy — it simply is not a torsion. The
+    bond angles around it are wrenched instead, which no other check notices,
+    because nothing is stretched: everything that moves stays the same distance
+    from the line it turns about.
+
+    This is the check that says the numbers in the tables are the right
+    numbers, and it can only be made against a real build.
+    """
+
+    @pytest.mark.parametrize(
+        ("library", "sequence", "aptamer"),
+        [
+            (rna(), "G A U C", "RNA"),
+            (rna(), "G", "RNA"),
+            (dna(), "G A T C", "DNA"),
+            (dna(), "G", "DNA"),
+        ],
+        ids=["rna-four", "rna-one", "dna-four", "dna-one"],
+    )
+    def test_every_declared_torsion_names_two_bonded_atoms(
+        self, tmp_path, library, sequence, aptamer
+    ):
+        """Across both nucleic acids, and both the four end-of-strand forms.
+
+        A one-nucleotide strand uses the standalone forms of the residues and a
+        four-nucleotide one uses the 5' form, the middle form and the 3' form,
+        so between them the four rows each residue has in the tables are all
+        covered.
+        """
+        system = LeapBuilder(cache_dir=tmp_path).build(
+            Assembly().with_aptamer(library, sequence),
+            ForceField.for_target(aptamer, "protein"),
+        )
+        bonds = {tuple(pair) for pair in bonds_from_topology(system.amber.topology)}
+        chain = system.chain("aptamer")
+        for index in range(chain.n_residues):
+            residue = chain.residue(index)
+            for which in range(residue.n_torsions):
+                torsion = residue.torsion(which, "3prime")
+                pair = (
+                    min(torsion.pivot, torsion.bond),
+                    max(torsion.pivot, torsion.bond),
+                )
+                gap = float(
+                    np.linalg.norm(
+                        system.pose.xyz[torsion.pivot] - system.pose.xyz[torsion.bond]
+                    )
+                )
+                assert pair in bonds, (
+                    f"{residue.name} torsion {which} names atoms "
+                    f"{pair[0]}-{pair[1]}, which are {gap:.2f} Å apart and not "
+                    f"bonded to each other"
+                )
 
 
 @needs_leap
