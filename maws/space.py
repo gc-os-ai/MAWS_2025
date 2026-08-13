@@ -723,20 +723,34 @@ def make_sampler(
     """
     Build a fully-configured surface-aware sampler for ``complex_obj``.
 
-    Two sampling modes are available:
+    Both modes draw a point uniformly through the volume of a bounding
+    sphere and keep it only if it lies outside the target's
+    solvent-accessible surface, so both return points that sit in solvent.
+    They differ in how far out into that solvent a point may sit.
 
-    - ``mode="sphere"`` (default): draws candidates uniformly in a
-      bounding sphere around the ligand and rejects those inside the
-      protein bulk via an SAS check. Returns a
-      :class:`SurfaceSampler`. This is the simple, fast, well-tested
-      default.
+    - ``mode="sphere"`` (default): the sphere is centred on the target's
+      centre of mass with a radius of ``furthest atom + reach``, and every
+      point outside the surface is kept. On a protein most of that volume
+      is open solvent well clear of the target. Measured on a 2760-atom
+      target with the shipped defaults: the sphere has a radius of 39 Å,
+      half the accepted points sit more than 12 Å from the nearest target
+      atom, and the furthest sits 25 Å out. A strand placed there floats
+      free of the target. Returns a :class:`SurfaceSampler`.
 
-    - ``mode="surface-following"`` (opt-in): also rejects candidates
-      that are more than ``d_max`` Å from any protein atom, so accepted
-      samples concentrate near the molecular surface. Returns a
-      :class:`SurfaceFollowingSampler`. Higher rejection rate; useful
-      when sample-density-per-surface-area matters more than wall-clock
-      speed.
+    - ``mode="surface-following"``: a point is kept only while some target
+      atom lies within ``d_max`` of it, so accepted points form a band over
+      the surface that dips into pockets and wraps around protrusions. On
+      the same target with ``d_max=6``, half the accepted points sit within
+      4.4 Å of an atom and none beyond 6 Å. It spends more draws per
+      accepted point. Returns a :class:`SurfaceFollowingSampler`.
+
+    The two limits measure different things, which is what makes the second
+    mode follow the shape: ``reach`` extends the target's overall bounding
+    radius, one number for the whole target, while ``d_max`` is measured
+    from whichever atom happens to be nearest the point.
+
+    Sphere mode can be aimed at one site with `site_centre`, which replaces
+    the auto-sized sphere with one of `site_radius` around a chosen point.
 
     Parameters
     ----------

@@ -8,10 +8,23 @@
 
 Two sampling modes are available:
 
+Both draw a point uniformly through the volume of a bounding sphere and keep it only if it lies outside the target's solvent-accessible surface. They differ in how far out into solvent a point may sit.
+
 | mode | what it does | when to pick it |
 |---|---|---|
-| `"sphere"` (default) | Bounding sphere envelope around the ligand COM, with an SAS-style rejection that skips candidates inside the protein bulk. | Default for most use cases. Fast (~40% rejection rate). Returns a [`SurfaceSampler`](#surfacesampler). |
-| `"surface-following"` (opt-in) | Same SAS rejection plus an outer cap that rejects candidates more than `d_max` Å from any protein atom. Accepted samples concentrate near the molecular surface. | Use when you need more samples close to the surface and can afford a higher rejection rate (~85%). Returns a [`SurfaceFollowingSampler`](#surfacefollowingsampler). |
+| `"sphere"` (default) | Sphere on the target's centre of mass, radius `furthest atom + reach`. Every point outside the surface is kept, including open solvent well clear of the target. | Fast (~40% rejection). Returns a [`SurfaceSampler`](#surfacesampler). |
+| `"surface-following"` | Keeps a point only while some target atom lies within `d_max`, so accepted points form a band over the surface that dips into pockets and wraps around protrusions. | When poses need to be in contact with the target. Higher rejection rate (~85%). Returns a [`SurfaceFollowingSampler`](#surfacefollowingsampler). |
+
+The two limits measure different things, which is what makes the second mode follow the shape: `reach` extends the target's overall bounding radius, one number for the whole target, while `d_max` is measured from whichever atom is nearest the point.
+
+Measured on a 2760-atom target (1BRQ) with the shipped defaults, 2000 accepted poses per mode, distance from the drawn point to the nearest target atom:
+
+| mode | median | max | further than 6 Å |
+|---|---|---|---|
+| `"sphere"`, `reach=10` | 12.2 Å | 24.7 Å | 85.7% |
+| `"surface-following"`, `d_max=6` | 4.4 Å | 6.0 Å | 0% |
+
+In sphere mode most of the volume is open solvent, so most poses put the strand clear of the target where it touches nothing. Pick `surface-following`, or give a `site_centre`, when the sample budget needs to go on poses that can actually bind.
 
 > **Note on prior shapes.** This module previously offered `Cube` and `Shell` envelopes. Both were measured on real targets (`notebooks/space_analysis.ipynb` on 1HAO) and dropped: `Cube` wasted its corners; `Shell`'s formula `inner = max(0, R_min - 5)` collapsed to 0 for every real protein, so it was just a sphere. The opt-in `surface-following` mode is the principled successor to the `Shell` idea.
 
