@@ -4,18 +4,27 @@ channels:
   - bioconda
   - nodefaults
 dependencies:
-  - python>=3.10
-  - numba=0.57.1
+  # Runtime. Keep this list in step with [project.dependencies] in
+  # pyproject.toml: continuous integration installs with pip and reads only
+  # that file, while a local checkout installs with conda and reads only this
+  # one, so a dependency added to one and not the other breaks whichever path
+  # was not updated.
+  - python>=3.11,<3.14
+  - numpy>=1.24
+  - scipy>=1.10
+  - mpmath>=1.2
   - openmm=8.0.0
+  # Builds the structures. Not on PyPI, so pip installs cannot supply it and
+  # anything needing it is marked as an integration test and skipped without.
   - ambertools=23.3
-  - mpmath>=1.2.1
-  - scipy
+  # For the notebooks under notebooks/, not for the package itself.
   - matplotlib
   - ipykernel
   - jupyterlab
   - pip
-
-dev-dependencies:
-  - pre-commit
-  - ruff
-  - black
+  - pip:
+      # Matches the "dev" extra in pyproject.toml.
+      - pytest>=8.0
+      - pytest-cov
+      - ruff>=0.12
+      - pre-commit
