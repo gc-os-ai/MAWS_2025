@@ -26,7 +26,7 @@ from openmm.unit import Quantity
 
 from maws.chain import Chain
 from maws.helpers import angle as ang
-from maws.helpers import nostrom
+from maws.helpers import atom_masses, mass_weighted_center, nostrom
 from maws.prepare import make_lib
 from maws.structure import Structure
 from maws.tools import find_exe, run
@@ -83,6 +83,7 @@ class Complex:
         self.simulation: app.Simulation | None = None
         self._bond_adjacency: dict[int, set[int]] | None = None
         self._moving_set_cache: dict[tuple[int, int], list[int]] = {}
+        self._atom_masses: np.ndarray | None = None
 
     # Chains-------------------------------------
 
@@ -448,6 +449,7 @@ class Complex:
         # derived from the previous one is stale.
         self._bond_adjacency = None
         self._moving_set_cache = {}
+        self._atom_masses = None
         self.integrator = mm.LangevinIntegrator(
             300.0 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
         )
@@ -847,7 +849,7 @@ class Complex:
             self.moving_set(fixed, pivot),
             positions[second] - positions[first],
             angle,
-            pivot,
+            positions[pivot],
         )
 
     def _rotate_indices(
@@ -855,9 +857,9 @@ class Complex:
         indices: Sequence[int],
         axis: Quantity,
         angle: float,
-        centre: int,
+        pivot: Quantity,
     ) -> None:
-        r"""Turn the named atoms about an axis through one of them.
+        r"""Turn the named atoms about an axis through a given point.
 
         Parameters
         ----------
@@ -868,9 +870,10 @@ class Complex:
             direction is used; the length is discarded.
         angle : float
             How far to turn, in radians.
-        centre : int
-            Index of the atom the axis passes through. It stays where it is,
-            and so does anything else lying on the axis.
+        pivot : openmm.unit.Quantity
+            The point the axis passes through, a 3-vector in ångström. It
+            stays where it is, and so does anything else lying on the axis.
+            It need not be one of the atoms being moved.
 
         Notes
         -----
@@ -914,7 +917,7 @@ class Complex:
         )
 
         pos = self.positions[:]
-        to_origin = mm.Vec3(0, 0, 0) * unit.angstroms - pos[centre]
+        to_origin = mm.Vec3(0, 0, 0) * unit.angstroms - pivot
         for j in indices:
             shifted = (pos[j] + to_origin).value_in_unit(unit.angstrom)
             turned = np.dot(np.array(shifted), rot)
@@ -974,7 +977,9 @@ class Complex:
 
         first = element[0] if glob else element[1]
         centre = element[2] if reverse else first
-        self._rotate_indices(range(first, element[2]), axis, angle, centre)
+        self._rotate_indices(
+            range(first, element[2]), axis, angle, self.positions[centre]
+        )
 
     def translate_global(self, element: Sequence[int], shift: Quantity) -> None:
         """
@@ -1004,6 +1009,127 @@ class Complex:
         for j in range(element[0], element[2]):
             pos[j] += vec_shift
         self.positions = pos[:]
+
+    def element_centre(self, element: Sequence[int]) -> np.ndarray:
+        """Return the centre of mass of one contiguous run of atoms.
+
+        Parameters
+        ----------
+        element : sequence of int
+            ``[start, bond, end]`` atom indices, counted across the whole
+            Complex. ``end`` is exclusive and ``bond`` is ignored.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(3,)`` mass-weighted centre in ångström.
+
+        Raises
+        ------
+        ValueError
+            If :attr:`positions` is unset, or if the Complex has no topology
+            because :meth:`build` has not run. Masses are read from the
+            topology.
+
+        See Also
+        --------
+        place_global : Puts this centre on a chosen point.
+
+        Notes
+        -----
+        Masses are read once per build and kept, so this costs one weighted
+        sum over the run of atoms.
+
+        Examples
+        --------
+        >>> complex.element_centre(chain.element)  # doctest: +SKIP
+        array([ 2.36, -0.13,  3.95])
+        """
+        if not self.positions:
+            raise ValueError("This Complex contains no positions! You CANNOT place!")
+        if self.topology is None:
+            raise ValueError(
+                "This Complex has no topology; call build() before placing."
+            )
+        if self._atom_masses is None:
+            self._atom_masses = atom_masses(self.topology)
+
+        start, end = element[0], element[2]
+        xyz = np.asarray(nostrom(self.positions[start:end]), dtype=float)
+        return mass_weighted_center(xyz, self._atom_masses[start:end])
+
+    def place_global(
+        self,
+        element: Sequence[int],
+        position: Quantity,
+        axis: Quantity,
+        angle: float,
+    ) -> None:
+        """place_global(element, position, axis, angle) -> None
+
+        Move a contiguous run of atoms to a chosen point, in a chosen
+        orientation.
+
+        The run is turned about its own centre of mass, then shifted so that
+        centre sits exactly on `position`. Both steps move the whole run
+        rigidly, so no bond length or bond angle inside it changes.
+
+        Parameters
+        ----------
+        element : sequence of int
+            ``[start, bond, end]`` atom indices, counted across the whole
+            Complex. ``end`` is exclusive and ``bond`` is ignored.
+        position : openmm.unit.Quantity
+            Where the centre of mass should end up, a 3-vector in ångström.
+            This is a destination, not a displacement: the run's own starting
+            coordinates do not affect where it lands.
+        axis : openmm.unit.Quantity
+            Direction of the rotation axis, a 3-vector in ångström. Only the
+            direction is used; the length is discarded.
+        angle : float
+            How far to turn, in radians.
+
+        Raises
+        ------
+        ValueError
+            If :attr:`positions` is unset, or if the Complex has no topology
+            because :meth:`build` has not run.
+
+        See Also
+        --------
+        element_centre : The point that lands on `position`.
+        translate_global : Shifts a run by a displacement instead.
+        maws.space.SurfaceSampler : Draws the points fed to this.
+
+        Notes
+        -----
+        The axis passes through the centre of mass, so the orientation drawn
+        for a pose cannot change where that pose lands. Turning about any
+        other point would also displace the run, by up to twice the distance
+        from that point to the centre of mass.
+
+        Examples
+        --------
+        Put a strand on a sampled point, turned about a sampled axis.
+
+        >>> from openmm import unit
+        >>> pose = sampler.generator()  # doctest: +SKIP
+        >>> complex.place_global(  # doctest: +SKIP
+        ...     chain.element,
+        ...     pose.position * unit.angstrom,
+        ...     pose.axis * unit.angstrom,
+        ...     pose.angle,
+        ... )
+        """
+        centre = self.element_centre(element)
+        self._rotate_indices(
+            range(element[0], element[2]),
+            axis,
+            angle,
+            mm.Vec3(*centre) * unit.angstrom,
+        )
+        shift = np.asarray(nostrom(position), dtype=float) - centre
+        self.translate_global(element, mm.Vec3(*shift) * unit.angstrom)
 
     # ------------------ Energetics/MD --------------------------------------
 
@@ -1138,6 +1264,7 @@ class Complex:
         size: float = 1e-1,
         iterations: int = 50,
         atoms: Sequence[int] | None = None,
+        rng: int | np.random.Generator | None = None,
     ) -> None:
         """
         Chain-wriggling heuristic: apply small random kicks, then minimize.
@@ -1153,6 +1280,9 @@ class Complex:
             are neither kicked nor relaxed: their masses are set to zero for the
             duration of the call, which pins them during minimization. ``None``
             lets the **whole** complex move.
+        rng : int or numpy.random.Generator, optional
+            Source of randomness for the kicks. Pass a seed to make a run
+            repeatable. Defaults to a fresh generator, so runs differ.
 
         Raises
         ------
@@ -1183,12 +1313,13 @@ class Complex:
                 )
             immobile = sorted(set(range(n_atoms)).difference(mobile))
 
+        generator = np.random.default_rng(rng)
         saved_masses = self._freeze_particles(immobile)
         try:
             for _repeat in range(iterations):
                 for i in mobile:
                     self.positions[i] += (
-                        np.random.uniform(-size, size, 3) * unit.angstrom
+                        generator.uniform(-size, size, 3) * unit.angstrom
                     )
                 self.minimize()
         finally:

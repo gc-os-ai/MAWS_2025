@@ -8,11 +8,12 @@ The single entry point is :func:`make_sampler`. It returns a sampler
 whose ``.generator()`` yields candidate poses (:class:`Sample`) that
 survive the configured filters. Two modes are available:
 
-- ``mode="sphere"`` (default): bounding-sphere envelope + SAS rejection.
-  Simple, fast, well-tested. Returns a :class:`SurfaceSampler`.
-- ``mode="surface-following"`` (opt-in): also caps how far a candidate
-  may sit from the nearest protein atom, so accepted samples concentrate
-  near the molecular surface. Returns a :class:`SurfaceFollowingSampler`.
+- ``mode="surface-following"`` (default): caps how far a candidate may sit
+  from the nearest target atom, so accepted samples form a band over the
+  molecular surface. Returns a :class:`SurfaceFollowingSampler`.
+- ``mode="sphere"``: bounding-sphere envelope + SAS rejection. Cheaper per
+  draw, at the cost of spending most draws on open solvent well clear of the
+  target. Returns a :class:`SurfaceSampler`.
 
 Public API
 ----------
@@ -23,16 +24,26 @@ NAngles : frozen dataclass
 Excluder
     KDTree-backed SAS rejection: a candidate is "clear" iff its distance
     to every ligand atom exceeds (Bondi vdW + probe).
+ClashFilter
+    Rejects a placed strand whose atoms overlap the docking target.
 SurfaceSampler
     Composes an envelope + an Excluder into a rejection sampler.
 SurfaceFollowingSampler
     Alternative sampler that concentrates poses near the molecular
     surface via an outer distance cap.
-make_sampler(complex_obj, *, mode="sphere", reach=10.0, d_max=6.0, probe=1.4)
+make_sampler(complex_obj, *, mode="surface-following", d_max=6.0, probe=1.4, rng=None)
     Factory: builds the requested sampler for the given Complex.
+draw_clear_conformation(complex_obj, chain, sampler, rotations, clash)
+    Draws poses and torsions until one sits clear of the target.
 compute_envelope_dims(complex_obj, reach)
     Returns the kwargs for the Sphere dataclass; useful in tests and
     notebooks.
+
+Reproducibility
+---------------
+Every random draw here comes from a :class:`numpy.random.Generator` given as
+``rng``. Pass a seed to repeat a run. Leave it out and each sampler builds
+its own generator, so runs differ.
 
 
 Examples
@@ -44,14 +55,14 @@ Examples
 """
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from typing import Literal, Protocol
 
 import numpy as np
 from openmm import unit
 from scipy.spatial import KDTree
 
-from maws.helpers import mass_weighted_center, nostrom
+from maws.helpers import atom_masses, mass_weighted_center, nostrom
 
 # Bondi (1964) "Van der Waals Volumes and Radii", J. Phys. Chem. 68(3):441-451.
 # These are the values used by Chimera, PyMOL, FreeSASA. Hardcoded rather
@@ -96,7 +107,7 @@ class Sample:
     angle: float  # radians
 
 
-def _random_unit_axis() -> np.ndarray:
+def _random_unit_axis(rng: np.random.Generator) -> np.ndarray:
     """Random unit vector uniformly distributed on the unit sphere.
 
     Uses the standard Gaussian-then-normalize recipe: the multivariate
@@ -106,7 +117,7 @@ def _random_unit_axis() -> np.ndarray:
     over-represent the cube's corner-aligned directions because the
     cube has greater radial extent along its diagonals than its faces.
     """
-    v = np.random.standard_normal(3)
+    v = rng.standard_normal(3)
     return v / np.linalg.norm(v)
 
 
@@ -121,11 +132,13 @@ class Envelope(Protocol):
     def generator(self) -> Sample: ...
 
 
-def _spherical_sample(centre: np.ndarray, r: float) -> np.ndarray:
+def _spherical_sample(
+    centre: np.ndarray, r: float, rng: np.random.Generator
+) -> np.ndarray:
     """Random point on a sphere of radius ``r`` around ``centre``
     (uniform direction)."""
-    phi = np.random.uniform(0, 2 * np.pi)
-    cos_psi = np.random.uniform(-1, 1)  # uniform on the sphere
+    phi = rng.uniform(0, 2 * np.pi)
+    cos_psi = rng.uniform(-1, 1)  # uniform on the sphere
     sin_psi = np.sqrt(1.0 - cos_psi * cos_psi)
     return np.array(
         [
@@ -160,29 +173,103 @@ class Sphere:
 
     The final position is ``centre + r · direction``. ``axis`` is an
     independent random unit vector; ``angle`` is ``U(0, 2π)``.
+
+    Parameters
+    ----------
+    radius : float
+        How far the sphere reaches from `centre`, in ångström.
+    centre : numpy.ndarray
+        Shape ``(3,)`` point the sphere is built around, in ångström.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
     """
 
     radius: float
     centre: np.ndarray
+    rng: InitVar[int | np.random.Generator | None] = None
+    _rng: np.random.Generator = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self, rng):
+        object.__setattr__(self, "_rng", np.random.default_rng(rng))
 
     def generator(self) -> Sample:
         # Volume-correct: r = R · u^(1/3) for u ~ U(0,1).
-        r = self.radius * np.random.uniform(0, 1) ** (1 / 3)
+        r = self.radius * self._rng.uniform(0, 1) ** (1 / 3)
         return Sample(
-            position=_spherical_sample(self.centre, r),
-            axis=_random_unit_axis(),
-            angle=float(np.random.uniform(0, 2 * np.pi)),
+            position=_spherical_sample(self.centre, r, self._rng),
+            axis=_random_unit_axis(self._rng),
+            angle=float(self._rng.uniform(0, 2 * np.pi)),
         )
 
 
 @dataclass(frozen=True)
 class NAngles:
-    """N independent angles drawn from [0, 2π). Used for in-residue rotations."""
+    """N independent angles drawn from [0, 2π). Used for in-residue rotations.
+
+    Parameters
+    ----------
+    n : int
+        How many angles each draw returns, one per rotatable bond.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
+    """
 
     n: int
+    rng: InitVar[int | np.random.Generator | None] = None
+    _rng: np.random.Generator = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self, rng):
+        object.__setattr__(self, "_rng", np.random.default_rng(rng))
 
     def generator(self) -> np.ndarray:
-        return np.random.uniform(0, 2 * np.pi, self.n)
+        return self._rng.uniform(0, 2 * np.pi, self.n)
+
+
+_WARNED_ELEMENTS: set[str] = set()
+"""Element symbols already reported as missing from :data:`_BONDI_VDW_RADII`.
+
+Process-wide, so a topology with thousands of atoms of an unlisted element
+produces one warning rather than thousands.
+"""
+
+
+def _vdw_radii(topology) -> np.ndarray:
+    """Return the van der Waals radius of every atom, in ångström.
+
+    Parameters
+    ----------
+    topology : openmm.app.Topology
+        Any object whose ``atoms()`` yields atoms carrying ``.element.symbol``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(N,)`` radii in ångström, ordered to match a positions array.
+
+    Warns
+    -----
+    RuntimeWarning
+        Once per element symbol missing from the Bondi table, which then falls
+        back to :data:`_DEFAULT_VDW`.
+    """
+    radii = []
+    for atom in topology.atoms():
+        symbol = atom.element.symbol
+        radius = _BONDI_VDW_RADII.get(symbol)
+        if radius is None:
+            radius = _DEFAULT_VDW
+            if symbol not in _WARNED_ELEMENTS:
+                _WARNED_ELEMENTS.add(symbol)
+                warnings.warn(
+                    f"Unknown element {symbol!r} - using fallback "
+                    f"vdW = {_DEFAULT_VDW} Å",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        radii.append(radius)
+    return np.array(radii, dtype=float)
 
 
 class Excluder:
@@ -229,26 +316,9 @@ class Excluder:
         smaller values are more permissive (allows tighter fits).
     """
 
-    # Process-wide: one warning per unknown element symbol.
-    _warned: set[str] = set()
-
     def __init__(self, complex_obj, probe: float = 1.4):
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
-        radii = np.empty(len(positions), dtype=float)
-        for i, atom in enumerate(complex_obj.topology.atoms()):
-            sym = atom.element.symbol
-            r = _BONDI_VDW_RADII.get(sym)
-            if r is None:
-                r = _DEFAULT_VDW
-                if sym not in Excluder._warned:
-                    Excluder._warned.add(sym)
-                    warnings.warn(
-                        f"Unknown element {sym!r} - using fallback "
-                        f"vdW = {_DEFAULT_VDW} Å",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-            radii[i] = r
+        radii = _vdw_radii(complex_obj.topology)
         self._positions = positions
         self._inflated = radii + probe
         self._max_inflated = float(self._inflated.max())
@@ -264,11 +334,108 @@ class Excluder:
         return bool((dists2 > self._inflated[idx] ** 2).all())
 
 
-def _atom_mass_in_dalton(atom) -> float:
-    m = atom.element.mass
-    if hasattr(m, "value_in_unit"):
-        return m.value_in_unit(unit.dalton)
-    return float(m)
+class ClashFilter:
+    """
+    Steric test on the atoms a pose actually puts down.
+
+    :class:`Excluder` answers a question about a *point*: could a water-sized
+    probe sit here? What a pose puts at that point is a whole strand — tens of
+    atoms spanning several ångström — so a point can pass that test while the
+    atoms placed there sit inside the target. This class tests those atoms.
+
+    Decision rule
+    -------------
+    The complex is split in two by `element`: the atoms of the strand being
+    placed, which move, and everything else, which is the docking target and
+    does not. A pose is rejected when any moving atom *i* and any rigid atom
+    *j* are closer than their van der Waals spheres allow:
+
+        ``dist(i, j) < vdW(i) + vdW(j) - tolerance``
+
+    Only strand-target pairs are tested. A torsion swings a rigid group about
+    a bond, so the strand keeps its own internal geometry, and the force field
+    already resists what little self-overlap a torsion can create.
+
+    Radii come from the Bondi (1964) table at the top of this module.
+
+    Parameters
+    ----------
+    complex_obj
+        Anything with ``.positions`` (openmm Quantity, Å-convertible, shape
+        ``(N, 3)``) and ``.topology.atoms()``. The rigid atoms' coordinates
+        are read once, here, so the target must not move afterwards.
+    element : sequence of int
+        ``[start, bond, end]`` atom indices of the strand being placed, with
+        ``end`` exclusive. ``bond`` is ignored.
+    tolerance : float, default=1.0
+        How far two atoms may overlap their van der Waals spheres before the
+        pose is rejected, in ångström. Some overlap has to be allowed: a
+        hydrogen bond puts a hydrogen roughly 0.8 Å inside the summed radii,
+        so a tolerance below that rejects poses that are bound, not clashing.
+        Raising it further admits harder contacts.
+
+    Raises
+    ------
+    ValueError
+        If `tolerance` is negative.
+
+    See Also
+    --------
+    Excluder : The point test this complements.
+    maws.complex.Complex.place_global : Puts the strand down for this to judge.
+
+    Examples
+    --------
+    Reject a pose, draw another, and keep the first that clears the target.
+
+    >>> clash = ClashFilter(complex, chain.element)  # doctest: +SKIP
+    >>> pose = sampler.generator()  # doctest: +SKIP
+    >>> clash.is_clear(nostrom(complex.positions))  # doctest: +SKIP
+    False
+    """
+
+    def __init__(self, complex_obj, element, *, tolerance: float = 1.0):
+        if tolerance < 0:
+            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+
+        radii = _vdw_radii(complex_obj.topology)
+        positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
+        self._start, self._end = element[0], element[2]
+
+        rigid = np.ones(len(positions), dtype=bool)
+        rigid[self._start : self._end] = False
+        self._rigid_positions = positions[rigid]
+        self._rigid_radii = radii[rigid]
+        self._moving_radii = radii[self._start : self._end]
+        self._tolerance = tolerance
+        self._tree = KDTree(self._rigid_positions)
+        self._reach = float(
+            self._rigid_radii.max() + self._moving_radii.max() - tolerance
+        )
+
+    def is_clear(self, positions: np.ndarray) -> bool:
+        """Return True when no atom of the strand overlaps the target.
+
+        Parameters
+        ----------
+        positions : numpy.ndarray
+            Shape ``(N, 3)`` coordinates of the whole complex in ångström,
+            unitless. Only the rows `element` covers are read.
+
+        Returns
+        -------
+        bool
+            True when the pose is worth costing an energy evaluation.
+        """
+        moving = np.asarray(positions, dtype=float)[self._start : self._end]
+        for k, near in enumerate(self._tree.query_ball_point(moving, self._reach)):
+            if not near:
+                continue
+            gap = np.linalg.norm(self._rigid_positions[near] - moving[k], axis=1)
+            limit = self._rigid_radii[near] + self._moving_radii[k] - self._tolerance
+            if (gap < limit).any():
+                return False
+        return True
 
 
 def compute_envelope_dims(complex_obj, reach: float) -> dict:
@@ -289,17 +456,105 @@ def compute_envelope_dims(complex_obj, reach: float) -> dict:
         Kwargs for :class:`Sphere`: ``{"radius": R_max + reach, "centre": COM}``.
     """
     pos = np.asarray(nostrom(complex_obj.positions), dtype=float)
-    masses = np.array(
-        [_atom_mass_in_dalton(a) for a in complex_obj.topology.atoms()],
-        dtype=float,
-    )
-    com = mass_weighted_center(pos, masses)
+    com = mass_weighted_center(pos, atom_masses(complex_obj.topology))
     dists = np.linalg.norm(pos - com, axis=1)
     return {"radius": float(dists.max()) + reach, "centre": com}
 
 
 class SamplingError(RuntimeError):
     """Raised when SurfaceSampler cannot find a clear point in max_rejections tries."""
+
+
+def draw_clear_conformation(
+    complex_obj,
+    chain,
+    sampler,
+    rotations,
+    clash: ClashFilter,
+    *,
+    residue: int = 0,
+    max_rejections: int = 1000,
+) -> Sample:
+    """draw_clear_conformation(complex_obj, chain, sampler, rotations, clash, *,
+    residue=0, max_rejections=1000)
+
+    Draw whole conformations until one sits clear of the target.
+
+    One attempt puts the strand at a drawn pose, bends one residue by a drawn
+    set of torsion angles, and asks `clash` whether the result touches the
+    target. A rejected attempt is neither scored nor counted, and the strand
+    is returned to where it started before the next one, so only a single
+    draw is accepted.
+
+    Both steps have to happen before the test. Placing a strand clear of the
+    target does not keep it clear: the torsions that follow swing atoms
+    several ångström, far enough to reach back into it.
+
+    Parameters
+    ----------
+    complex_obj : maws.complex.Complex
+        Holds both the strand and the target. Left holding the accepted
+        conformation.
+    chain : maws.chain.Chain
+        The strand being placed and bent.
+    sampler
+        Draws the pose. Any object with ``.generator() -> Sample``
+        (built-in: :class:`SurfaceSampler`).
+    rotations : NAngles
+        Draws one torsion angle per rotatable backbone bond, in radians.
+    clash : ClashFilter
+        Built for the same `complex_obj` and ``chain.element``.
+    residue : int, default=0
+        Which residue of `chain` the torsions are applied to. The default is
+        the only residue of a one-nucleotide strand.
+    max_rejections : int, default=1000
+        Hard cap on consecutive rejected attempts before giving up.
+
+    Returns
+    -------
+    Sample
+        The pose that was accepted. `complex_obj` already holds it.
+
+    Raises
+    ------
+    SamplingError
+        If nothing clears the target within `max_rejections` attempts.
+
+    See Also
+    --------
+    ClashFilter : Makes the accept/reject decision.
+    maws.complex.Complex.place_global : Puts the strand down.
+
+    Examples
+    --------
+    >>> clash = ClashFilter(complex, chain.element)  # doctest: +SKIP
+    >>> pose = draw_clear_conformation(  # doctest: +SKIP
+    ...     complex, chain, sampler, NAngles(4), clash
+    ... )
+    """
+    start = complex_obj.positions[:]
+    for _ in range(max_rejections):
+        complex_obj.positions = start[:]
+
+        pose = sampler.generator()
+        complex_obj.place_global(
+            chain.element,
+            pose.position * unit.angstrom,
+            pose.axis * unit.angstrom,
+            pose.angle,
+        )
+        for torsion, angle in enumerate(rotations.generator()):
+            chain.rotate_in_residue(residue, torsion, angle)
+
+        if clash.is_clear(nostrom(complex_obj.positions)):
+            return pose
+
+    complex_obj.positions = start[:]
+    raise SamplingError(
+        f"Could not fit the strand against the target in {max_rejections} "
+        f"attempts. The sampling region may sit inside the target - increase "
+        f"--reach, or raise the clash tolerance."
+    )
 
 
 @dataclass
@@ -352,8 +607,9 @@ class SurfaceSampler:
                 return sample
         raise SamplingError(
             f"Could not draw a clear point in {self.max_rejections} attempts. "
-            f"Envelope may be fully buried - increase --reach, decrease --probe, "
-            f"or check ligand size."
+            f"The region may lie inside the target - widen it with --reach, or "
+            f"with --site-radius if a site centre was given, decrease --probe, "
+            f"or check the ligand size."
         )
 
 
@@ -400,6 +656,15 @@ class SurfaceFollowingSampler:
         :class:`SamplingError` is raised. The cap is higher than
         :class:`SurfaceSampler`'s because the band's rejection rate is
         higher.
+    centre : array-like, optional
+        Shape ``(3,)`` point in ångström to search around, narrowing the band
+        to one site. Defaults to the whole surface.
+    radius : float, optional
+        How far the search reaches from `centre`, in ångström. Required
+        alongside `centre`.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
     """
 
     def __init__(
@@ -409,18 +674,25 @@ class SurfaceFollowingSampler:
         d_max: float = 6.0,
         probe: float = 1.4,
         max_rejections: int = 50_000,
+        centre=None,
+        radius: float | None = None,
+        rng: int | np.random.Generator | None = None,
     ):
         if d_max <= 0:
             raise ValueError(f"d_max must be > 0, got {d_max}")
+        self._rng = np.random.default_rng(rng)
         positions = np.asarray(nostrom(complex_obj.positions), dtype=float)
-        masses = np.array(
-            [_atom_mass_in_dalton(a) for a in complex_obj.topology.atoms()],
-            dtype=float,
-        )
-        com = mass_weighted_center(positions, masses)
-        R_max = float(np.linalg.norm(positions - com, axis=1).max())
-        self._com = com
-        self._R_bound = R_max + d_max
+
+        if centre is None:
+            com = mass_weighted_center(positions, atom_masses(complex_obj.topology))
+            R_max = float(np.linalg.norm(positions - com, axis=1).max())
+            self._com = com
+            self._R_bound = R_max + d_max
+        else:
+            if radius is None:
+                raise ValueError("centre needs a radius to go with it.")
+            self._com = np.asarray(centre, dtype=float)
+            self._R_bound = float(radius)
         self._tree = KDTree(positions)
         self._excluder = Excluder(complex_obj, probe=probe)
         self._d_max = d_max
@@ -429,9 +701,9 @@ class SurfaceFollowingSampler:
     def generator(self) -> Sample:
         for _ in range(self._max_rejections):
             # Uniform-in-volume draw inside the bounding sphere.
-            r = self._R_bound * np.random.uniform(0, 1) ** (1 / 3)
-            phi = np.random.uniform(0, 2 * np.pi)
-            cos_psi = np.random.uniform(-1, 1)
+            r = self._R_bound * self._rng.uniform(0, 1) ** (1 / 3)
+            phi = self._rng.uniform(0, 2 * np.pi)
+            cos_psi = self._rng.uniform(-1, 1)
             sin_psi = np.sqrt(1.0 - cos_psi * cos_psi)
             position = self._com + r * np.array(
                 [np.cos(phi) * sin_psi, np.sin(phi) * sin_psi, cos_psi]
@@ -443,8 +715,8 @@ class SurfaceFollowingSampler:
                 continue  # inside protein bulk
             return Sample(
                 position=position,
-                axis=_random_unit_axis(),
-                angle=float(np.random.uniform(0, 2 * np.pi)),
+                axis=_random_unit_axis(self._rng),
+                angle=float(self._rng.uniform(0, 2 * np.pi)),
             )
         raise SamplingError(
             f"Could not draw a surface-following sample in "
@@ -456,44 +728,76 @@ class SurfaceFollowingSampler:
 def make_sampler(
     complex_obj,
     *,
-    mode: Literal["sphere", "surface-following"] = "sphere",
+    mode: Literal["sphere", "surface-following"] = "surface-following",
     reach: float = 10.0,
     d_max: float = 6.0,
     probe: float = 1.4,
+    site_centre=None,
+    site_radius: float | None = None,
+    rng: int | np.random.Generator | None = None,
 ):
     """
     Build a fully-configured surface-aware sampler for ``complex_obj``.
 
-    Two sampling modes are available:
+    Both modes draw a point uniformly through the volume of a bounding
+    sphere and keep it only if it lies outside the target's
+    solvent-accessible surface, so both return points that sit in solvent.
+    They differ in how far out into that solvent a point may sit.
 
-    - ``mode="sphere"`` (default): draws candidates uniformly in a
-      bounding sphere around the ligand and rejects those inside the
-      protein bulk via an SAS check. Returns a
-      :class:`SurfaceSampler`. This is the simple, fast, well-tested
-      default.
+    - ``mode="surface-following"`` (default): a point is kept only while some
+      target atom lies within ``d_max`` of it, so accepted points form a band
+      over the surface that dips into pockets and wraps around protrusions.
+      Measured with ``d_max=6``, every accepted point lies within 6 Å of an
+      atom and half within 4.5 Å, on targets from a 13-atom neurotransmitter
+      up to a 1408-atom protein. Returns a :class:`SurfaceFollowingSampler`.
 
-    - ``mode="surface-following"`` (opt-in): also rejects candidates
-      that are more than ``d_max`` Å from any protein atom, so accepted
-      samples concentrate near the molecular surface. Returns a
-      :class:`SurfaceFollowingSampler`. Higher rejection rate; useful
-      when sample-density-per-surface-area matters more than wall-clock
-      speed.
+    - ``mode="sphere"``: the sphere is centred on the target's centre of mass
+      with a radius of ``furthest atom + reach``, and every point outside the
+      surface is kept. Most of that volume is open solvent: 85.6% of accepted
+      points land more than 6 Å from the nearest atom for serotonin, 87.0%
+      for cortisol, 87.7% for a 1408-atom protein. A strand placed there
+      floats free of the target. Returns a :class:`SurfaceSampler`.
+
+    The two limits measure different things, which is what makes the default
+    follow the shape. ``reach`` extends the target's overall bounding radius,
+    one number fixed for the whole target, so the right value depends on the
+    target's size and shape. ``d_max`` is measured from whichever atom happens
+    to be nearest the point, so one value serves every target size.
+
+    Either mode can be aimed at one site with `site_centre`, which replaces
+    the auto-sized region with one of `site_radius` around a chosen point.
+    Combining it with the default gives poses that are both near the site and
+    against the surface.
 
     Parameters
     ----------
     complex_obj
         Built ligand-only ``Complex`` (positions + topology).
-    mode : {"sphere", "surface-following"}, default "sphere"
+    mode : {"surface-following", "sphere"}, default "surface-following"
         Which sampler to construct.
     reach : float, default 10.0
         ``mode="sphere"`` only. How far the bounding sphere extends
         past the ligand's bounding radius (Å). Must be ``>= 0``.
     d_max : float, default 6.0
-        ``mode="surface-following"`` only. Band thickness from the
-        molecular surface (Å). Must be ``> 0``.
+        ``mode="surface-following"`` only. How far from the nearest target
+        atom a pose may sit (Å). Must be ``> 0``. The default suits every
+        target size, since it is measured locally rather than from the
+        target's overall radius.
     probe : float, default 1.4
         Probe radius for the SAS rejection (Å), water-equivalent by
         default. Must be ``>= 0``. Used by both modes.
+    site_centre : array-like, optional
+        Shape ``(3,)`` point in ångström to sample around, in the target's
+        coordinate frame. Give it when the binding site is known: the whole
+        sample budget is then spent on that site rather than spread over the
+        target's entire surface. Omit it and the region covers the whole
+        target. Works with either mode.
+    site_radius : float, default 15.0
+        How far the region reaches from `site_centre`, in ångström. Applies
+        only alongside `site_centre`. Must be ``> 0``.
+    rng : int or numpy.random.Generator, optional
+        Source of randomness. Pass a seed to make a run repeatable.
+        Defaults to a fresh generator, so runs differ.
 
     Returns
     -------
@@ -514,15 +818,38 @@ def make_sampler(
     """
     if probe < 0:
         raise ValueError(f"probe must be >= 0, got {probe}")
+    if reach < 0:
+        raise ValueError(f"reach must be >= 0, got {reach}")
+    if site_centre is None and site_radius is not None:
+        raise ValueError("site_radius applies only alongside site_centre.")
+    if site_centre is not None:
+        site_centre = np.asarray(site_centre, dtype=float)
+        if site_centre.shape != (3,):
+            raise ValueError(
+                f"site_centre must be a point of three coordinates, got shape "
+                f"{site_centre.shape}"
+            )
+        site_radius = 15.0 if site_radius is None else float(site_radius)
+        if site_radius <= 0:
+            raise ValueError(f"site_radius must be > 0, got {site_radius}")
+
     if mode == "sphere":
-        if reach < 0:
-            raise ValueError(f"reach must be >= 0, got {reach}")
-        dims = compute_envelope_dims(complex_obj, reach)
-        envelope = Sphere(**dims)
+        if site_centre is None:
+            dims = compute_envelope_dims(complex_obj, reach)
+        else:
+            dims = {"radius": site_radius, "centre": site_centre}
+        envelope = Sphere(**dims, rng=rng)
         excluder = Excluder(complex_obj, probe=probe)
         return SurfaceSampler(envelope=envelope, excluder=excluder)
     if mode == "surface-following":
-        return SurfaceFollowingSampler(complex_obj, d_max=d_max, probe=probe)
+        return SurfaceFollowingSampler(
+            complex_obj,
+            d_max=d_max,
+            probe=probe,
+            centre=site_centre,
+            radius=site_radius,
+            rng=rng,
+        )
     raise ValueError(
         f"Unknown mode {mode!r}; expected one of 'sphere', 'surface-following'."
     )

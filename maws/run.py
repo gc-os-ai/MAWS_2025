@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from openmm import app, unit
+import numpy as np
+from openmm import app
 
 import maws.space as space
 from maws.complex import Complex
@@ -17,6 +19,7 @@ from maws.routines import entropy_score
 
 AptamerType = Literal["RNA", "DNA"]
 MoleculeType = Literal["protein", "organic", "lipid"]
+SamplerMode = Literal["sphere", "surface-following"]
 PDBInput = str | Path
 
 
@@ -35,12 +38,16 @@ class MawsResult:
         Entropy score used for selection.
     pdb_path : str
         Path to the saved result PDB file produced by the run.
+    seed : int
+        The seed the run actually used. Passing it back as
+        ``MawsRunner(seed=...)`` reproduces this result.
     """
 
     sequence: str
     energy: float
     entropy: float
     pdb_path: str | None = None
+    seed: int | None = None
 
 
 class MawsRunner:
@@ -58,9 +65,15 @@ class MawsRunner:
         remove_h: bool = False,
         drop_hetatm: bool = False,
         verbose: bool = False,
+        sampler_mode: SamplerMode = "surface-following",
         reach: float = 10.0,
+        d_max: float = 6.0,
+        site_centre: Sequence[float] | None = None,
+        site_radius: float | None = None,
         probe: float = 1.4,
+        clash_tolerance: float = 1.0,
         salt_conc: float = 0.15,
+        seed: int | None = None,
     ) -> None:
         if num_nucleotides <= 0:
             raise ValueError(
@@ -72,8 +85,12 @@ class MawsRunner:
             raise ValueError(f"reach must be >= 0, got {reach}")
         if probe < 0:
             raise ValueError(f"probe must be >= 0, got {probe}")
+        if clash_tolerance < 0:
+            raise ValueError(f"clash_tolerance must be >= 0, got {clash_tolerance}")
         if salt_conc < 0:
             raise ValueError(f"salt_conc must be >= 0, got {salt_conc}")
+        if seed is not None and not isinstance(seed, int | np.integer):
+            raise TypeError(f"seed must be an int or None, got {type(seed).__name__}")
 
         self.num_nucleotides = num_nucleotides
         self.aptamer_type = aptamer_type
@@ -86,9 +103,15 @@ class MawsRunner:
         self.remove_h = remove_h
         self.drop_hetatm = drop_hetatm
         self.verbose = verbose
+        self.sampler_mode = sampler_mode
         self.reach = reach
+        self.d_max = d_max
+        self.site_centre = site_centre
+        self.site_radius = site_radius
         self.probe = probe
+        self.clash_tolerance = clash_tolerance
         self.salt_conc = salt_conc
+        self.seed = seed
 
     def run(
         self,
@@ -120,6 +143,12 @@ class MawsRunner:
             4  # MAWS rotates 4 backbone torsions per residue in this implementation
         )
         log = logging.getLogger(__name__)
+
+        # A run with no seed still gets one, so its result can be reproduced
+        # from the log afterwards.
+        seed = np.random.SeedSequence().entropy if self.seed is None else self.seed
+        rng = np.random.default_rng(seed)
+        log.info("Random seed: %s", seed)
 
         if self.verbose:
             log.info("MAWS run started: name=%s", name)
@@ -209,8 +238,17 @@ class MawsRunner:
         )
         ligand_only.build()
 
-        sampler = space.make_sampler(ligand_only, reach=self.reach, probe=self.probe)
-        rotations = space.NAngles(N_BACKBONE_TORSIONS)
+        sampler = space.make_sampler(
+            ligand_only,
+            mode=self.sampler_mode,
+            reach=self.reach,
+            d_max=self.d_max,
+            site_centre=self.site_centre,
+            site_radius=self.site_radius,
+            probe=self.probe,
+            rng=rng,
+        )
+        rotations = space.NAngles(N_BACKBONE_TORSIONS, rng=rng)
 
         # Track best candidate across steps
         best_entropy = None
@@ -235,16 +273,12 @@ class MawsRunner:
             cx.build()
 
             positions0 = cx.positions[:]
+            clash = space.ClashFilter(
+                cx, aptamer.element, tolerance=self.clash_tolerance
+            )
 
             for _ in range(self.first_chunk_size):
-                pose = sampler.generator()
-                rotation = rotations.generator()
-
-                cx.translate_global(aptamer.element, pose.position * unit.angstrom)
-                cx.rotate_global(aptamer.element, pose.axis * unit.angstrom, pose.angle)
-
-                for j in range(N_BACKBONE_TORSIONS):
-                    aptamer.rotate_in_residue(0, j, rotation[j])
+                space.draw_clear_conformation(cx, aptamer, sampler, rotations, clash)
 
                 energy = cx.get_energy()[0]
                 if free_E is None or energy < free_E:
@@ -308,6 +342,7 @@ class MawsRunner:
                     cx.pert_min(
                         size=0.5,
                         atoms=range(aptamer.element[0], aptamer.element[2]),
+                        rng=rng,
                     )
 
                     positions0 = cx.positions[:]
@@ -389,4 +424,5 @@ class MawsRunner:
             energy=float(best_energy) if best_energy is not None else float("nan"),
             entropy=float(best_entropy) if best_entropy is not None else float("nan"),
             pdb_path=written_pdb,
+            seed=int(seed),
         )

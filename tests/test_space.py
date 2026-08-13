@@ -12,6 +12,8 @@ Surface-aware sampling primitives:
 import math
 
 import numpy as np
+import pytest
+from openmm import unit
 
 from maws.space import _BONDI_VDW_RADII, _DEFAULT_VDW, NAngles
 
@@ -129,9 +131,9 @@ class TestRandomUnitAxis:
     def test_axes_are_unit_length(self):
         from maws.space import _random_unit_axis
 
-        np.random.seed(0)
+        rng = np.random.default_rng(0)
         for _ in range(50):
-            axis = _random_unit_axis()
+            axis = _random_unit_axis(rng)
             assert abs(np.linalg.norm(axis) - 1.0) < 1e-9
 
     def test_isotropic_face_vs_corner_directions(self):
@@ -153,9 +155,9 @@ class TestRandomUnitAxis:
         """
         from maws.space import _random_unit_axis
 
-        np.random.seed(0)
+        rng = np.random.default_rng(0)
         n = 50_000
-        axes = np.abs(np.array([_random_unit_axis() for _ in range(n)]))
+        axes = np.abs(np.array([_random_unit_axis(rng) for _ in range(n)]))
         max_per_axis = axes.max(axis=1)
         min_per_axis = axes.min(axis=1)
         face_fraction = float((max_per_axis > 0.85).mean())
@@ -219,6 +221,346 @@ class TestExcluder:
         )
         # Touch the unused-but-meaningful default to silence linters
         assert _DEFAULT_VDW == 1.70
+
+
+class TestClashFilter:
+    """Tests for ClashFilter, the check on the atoms that actually get placed.
+
+    The sampler's own filter asks whether a water-sized probe could sit at the
+    sampled point. What gets placed there is a whole nucleotide, so a point
+    can pass that check while the atoms put there overlap the target. This
+    filter is the check on those atoms.
+
+    Every atom in the fixture is carbon, Bondi radius 1.70 A. A moving atom
+    and a rigid atom therefore count as clashing once they are closer than
+    ``1.70 + 1.70 - tolerance``.
+
+    See issue #48.
+    """
+
+    ELEMENT = [0, 1, 2]  # atoms 0-1 move, everything from index 2 is rigid
+
+    @staticmethod
+    def moved(x):
+        """Return full positions with the moving pair starting at ``x`` on the x-axis.
+
+        The two rigid atoms stay at x = 50 and x = 51, so the closest
+        moving-rigid pair is atom 1 at ``x + 1`` against the rigid atom at 50.
+        """
+        return np.array(
+            [[x, 0.0, 0.0], [x + 1.0, 0.0, 0.0], [50.0, 0.0, 0.0], [51.0, 0.0, 0.0]]
+        )
+
+    def test_clear_when_far_apart(self, synthetic_docking_complex):
+        """A strand placed far from the target is accepted."""
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT)
+        assert f.is_clear(self.moved(0.0))
+
+    def test_blocked_when_placed_on_top_of_a_rigid_atom(
+        self, synthetic_docking_complex
+    ):
+        """A strand sharing coordinates with a target atom is rejected.
+
+        This is the case the energy blow-ups come from: two atoms at the same
+        place give a potential energy many orders of magnitude above a real
+        pose, and that pose then wins on the selection score.
+        """
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT)
+        assert not f.is_clear(self.moved(50.0))
+
+    def test_the_cut_is_the_summed_radii_less_the_tolerance(
+        self, synthetic_docking_complex
+    ):
+        """Two carbons are rejected below 3.00 A and accepted above it.
+
+        Both radii are 1.70 A and the tolerance is 0.4 A, so the cut sits at
+        1.70 + 1.70 - 0.4 = 3.00 A. Testing either side of it pins down that
+        the filter compares against summed radii rather than a flat distance.
+        """
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=0.4)
+        assert not f.is_clear(self.moved(46.1))  # atom 1 is 2.9 A away
+        assert f.is_clear(self.moved(45.9))  # atom 1 is 3.1 A away
+
+    def test_a_larger_tolerance_accepts_a_closer_contact(
+        self, synthetic_docking_complex
+    ):
+        """Raising the tolerance lets through a contact a lower one rejects.
+
+        The tolerance is how far two atoms may overlap before the pose is
+        thrown away. Real complexes need some overlap allowed: a hydrogen bond
+        puts a hydrogen about 0.8 A inside the summed radii.
+        """
+        from maws.space import ClashFilter
+
+        strict = ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=0.4)
+        loose = ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=1.5)
+        assert not strict.is_clear(self.moved(46.1))
+        assert loose.is_clear(self.moved(46.1))
+
+    def test_two_rigid_atoms_overlapping_is_not_a_clash(
+        self, synthetic_docking_complex
+    ):
+        """Only the moving atoms are tested, so the target's own geometry passes.
+
+        The target comes from the input PDB and cannot be redrawn. Judging it
+        would reject every pose in the run rather than the bad ones.
+        """
+        from maws.space import ClashFilter
+
+        f = ClashFilter(synthetic_docking_complex, self.ELEMENT)
+        positions = self.moved(0.0)
+        positions[3] = positions[2]
+        assert f.is_clear(positions)
+
+    def test_rejects_negative_tolerance(self, synthetic_docking_complex):
+        """A negative tolerance raises, rather than silently widening the cut.
+
+        It would mean demanding a gap between the strand and the target that
+        no bound pose can satisfy, so it is always a mistake.
+        """
+        import pytest
+
+        from maws.space import ClashFilter
+
+        with pytest.raises(ValueError, match="tolerance"):
+            ClashFilter(synthetic_docking_complex, self.ELEMENT, tolerance=-1.0)
+
+
+class _StubSampler:
+    """Draws the same pose every time and counts how often it was asked."""
+
+    def __init__(self):
+        self.draws = 0
+
+    def generator(self):
+        from maws.space import Sample
+
+        self.draws += 1
+        return Sample(position=np.zeros(3), axis=np.array([0.0, 0.0, 1.0]), angle=0.0)
+
+
+class _StubRotations:
+    """Stands in for NAngles, handing back a fixed set of torsion angles."""
+
+    def __init__(self, n=4):
+        self.n = n
+
+    def generator(self):
+        return np.zeros(self.n)
+
+
+class _StubChain:
+    """Records the torsions applied to it. ``element`` covers atoms 0-1."""
+
+    element = [0, 1, 2]
+
+    def __init__(self):
+        self.bends = 0
+
+    def rotate_in_residue(self, residue, torsion, angle):
+        self.bends += 1
+
+
+class _StubComplex:
+    """Moves atom 0 one A along x each time it is placed.
+
+    ``offsets`` records where atom 0 sat at the start of every attempt, which
+    is how a test sees whether the strand was reset between attempts.
+    """
+
+    def __init__(self):
+        import openmm as mm
+        from openmm import unit as ommunit
+
+        self._mm = mm
+        self._unit = ommunit
+        self.positions = [mm.Vec3(0.0, 0.0, 0.0)] * 3 * ommunit.angstrom
+        self.offsets = []
+
+    def place_global(self, element, position, axis, angle):
+        from maws.helpers import nostrom
+
+        self.offsets.append(float(np.asarray(nostrom(self.positions))[0][0]))
+        moved = self.positions[:]
+        moved[0] += self._mm.Vec3(1.0, 0.0, 0.0) * self._unit.angstrom
+        self.positions = moved
+
+
+class _StubClash:
+    """Rejects the first `rejections` conformations, then accepts everything.
+
+    ``bends_at_check`` records how many torsions had been applied by the time
+    each decision was made, which is how a test sees the order of operations.
+    """
+
+    def __init__(self, rejections, chain=None):
+        self.rejections = rejections
+        self.chain = chain
+        self.bends_at_check = []
+
+    def is_clear(self, positions):
+        if self.chain is not None:
+            self.bends_at_check.append(self.chain.bends)
+        if self.rejections:
+            self.rejections -= 1
+            return False
+        return True
+
+
+class TestDrawClearConformation:
+    """Tests for draw_clear_conformation, the reject-and-redraw loop.
+
+    See issue #48.
+    """
+
+    def test_a_clear_conformation_is_returned_on_the_first_draw(self):
+        """Nothing is redrawn when the first attempt already clears the target."""
+        from maws.space import draw_clear_conformation
+
+        sampler = _StubSampler()
+        draw_clear_conformation(
+            _StubComplex(), _StubChain(), sampler, _StubRotations(), _StubClash(0)
+        )
+        assert sampler.draws == 1
+
+    def test_a_rejected_conformation_is_drawn_again(self):
+        """Each rejection costs one more pose and one more set of torsions.
+
+        A rejected attempt must not be scored, and must not be retried
+        unchanged, or the loop would either keep the clash or never end.
+        """
+        from maws.space import draw_clear_conformation
+
+        sampler, chain, rotations = _StubSampler(), _StubChain(), _StubRotations(4)
+        draw_clear_conformation(
+            _StubComplex(), chain, sampler, rotations, _StubClash(3)
+        )
+        assert sampler.draws == 4
+        assert chain.bends == 4 * 4
+
+    def test_the_strand_is_reset_before_each_attempt(self):
+        """Every attempt starts from the coordinates the strand came in with.
+
+        Without the reset each attempt would build on the rejected one before
+        it, so the accepted conformation would be a composition of failures
+        rather than the single draw the sampler reports.
+        """
+        from maws.space import draw_clear_conformation
+
+        cx = _StubComplex()
+        draw_clear_conformation(
+            cx, _StubChain(), _StubSampler(), _StubRotations(), _StubClash(3)
+        )
+        assert cx.offsets == [0.0, 0.0, 0.0, 0.0]
+
+    def test_the_torsions_are_applied_before_the_clash_check(self):
+        """The check sees the bent strand, not the freshly placed one.
+
+        Placing a strand clear of the target does not keep it clear: the
+        torsions swing atoms far enough to reach back into it, so a check made
+        before them would pass conformations that clash.
+        """
+        from maws.space import draw_clear_conformation
+
+        chain = _StubChain()
+        clash = _StubClash(0, chain=chain)
+        draw_clear_conformation(
+            _StubComplex(), chain, _StubSampler(), _StubRotations(4), clash
+        )
+        assert clash.bends_at_check == [4]
+
+    def test_giving_up_raises(self):
+        """A target nothing can clear fails loudly instead of looping forever."""
+        import pytest
+
+        from maws.space import SamplingError, draw_clear_conformation
+
+        with pytest.raises(SamplingError, match="attempts"):
+            draw_clear_conformation(
+                _StubComplex(),
+                _StubChain(),
+                _StubSampler(),
+                _StubRotations(),
+                _StubClash(999),
+                max_rejections=5,
+            )
+
+
+class TestModeAndSiteCompose:
+    """The region's shape and where it is aimed are independent settings.
+
+    ``mode`` picks the shape - a solid ball, or a band over the target's
+    surface - and ``site_centre`` says where the region sits and how far it
+    reaches. Every combination of the two is meaningful, so none may be
+    rejected.
+
+    Restricting ``site_centre`` to one mode is what these tests guard against.
+    It held while that mode was the default, and quietly made a known binding
+    site unusable the moment the default changed. See issue #48.
+    """
+
+    # The octahedron fixture puts a carbon 5 A out along each axis.
+    SITE = np.array([5.0, 0.0, 0.0])
+    SITE_RADIUS = 8.0
+    D_MAX = 6.0
+
+    @pytest.mark.parametrize("mode", ["sphere", "surface-following"])
+    @pytest.mark.parametrize("aimed", [False, True])
+    def test_every_combination_honours_every_constraint(
+        self, synthetic_octahedron_complex, mode, aimed
+    ):
+        """All four combinations draw poses, and each one obeys what it asked for."""
+        from maws.space import Excluder, make_sampler
+
+        site = {"site_centre": self.SITE, "site_radius": self.SITE_RADIUS}
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            mode=mode,
+            d_max=self.D_MAX,
+            rng=0,
+            **(site if aimed else {}),
+        )
+
+        excluder = Excluder(synthetic_octahedron_complex, probe=1.4)
+        atoms = np.asarray(
+            synthetic_octahedron_complex.positions.value_in_unit(unit.angstrom),
+            dtype=float,
+        )
+
+        for _ in range(25):
+            pos = sampler.generator().position
+            assert excluder.is_clear(pos), "pose landed inside the target"
+            if aimed:
+                assert np.linalg.norm(pos - self.SITE) <= self.SITE_RADIUS + 1e-9, (
+                    "pose left the site it was aimed at"
+                )
+            if mode == "surface-following":
+                gap = np.linalg.norm(atoms - pos, axis=1).min()
+                assert gap <= self.D_MAX + 1e-9, "pose drifted off the surface"
+
+    def test_the_shipped_defaults_accept_a_site(self, synthetic_octahedron_complex):
+        """A site can be given without naming a mode.
+
+        This is the exact call that broke: aiming at a binding site must not
+        require opting out of whichever mode ships as the default.
+        """
+        from maws.space import make_sampler
+
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            site_centre=self.SITE,
+            site_radius=self.SITE_RADIUS,
+            rng=0,
+        )
+        for _ in range(10):
+            pos = sampler.generator().position
+            assert np.linalg.norm(pos - self.SITE) <= self.SITE_RADIUS + 1e-9
 
 
 class TestComputeEnvelopeDims:
@@ -293,7 +635,9 @@ class TestMakeSampler:
     ):
         from maws.space import Sphere, SurfaceSampler, make_sampler
 
-        s = make_sampler(synthetic_octahedron_complex, reach=10.0, probe=1.4)
+        s = make_sampler(
+            synthetic_octahedron_complex, mode="sphere", reach=10.0, probe=1.4
+        )
         assert isinstance(s, SurfaceSampler)
         assert isinstance(s.envelope, Sphere)
 
@@ -301,14 +645,13 @@ class TestMakeSampler:
         """For the octahedron with reach=10, sphere radius should be 15."""
         from maws.space import make_sampler
 
-        s = make_sampler(synthetic_octahedron_complex, reach=10.0)
+        s = make_sampler(synthetic_octahedron_complex, mode="sphere", reach=10.0)
         assert s.envelope.radius == 15.0
 
     def test_returns_clear_samples(self, synthetic_octahedron_complex):
         from maws.space import make_sampler
 
-        np.random.seed(0)
-        s = make_sampler(synthetic_octahedron_complex)
+        s = make_sampler(synthetic_octahedron_complex, mode="sphere", rng=0)
         for _ in range(20):
             sample = s.generator()
             assert s.excluder.is_clear(sample.position)
@@ -371,11 +714,18 @@ class TestSurfaceFollowingSampler:
 
 
 class TestMakeSamplerModes:
-    def test_default_is_sphere(self, synthetic_octahedron_complex):
-        from maws.space import SurfaceSampler, make_sampler
+    def test_default_is_surface_following(self, synthetic_octahedron_complex):
+        """The default keeps poses against the target's surface.
+
+        A bounding sphere spends most of its volume on open solvent at every
+        target size: measured on serotonin, cortisol and a 1408-atom protein,
+        85.6%, 87.0% and 87.7% of sphere-mode poses land more than 6 A from
+        the nearest atom, where a strand touches nothing.
+        """
+        from maws.space import SurfaceFollowingSampler, make_sampler
 
         s = make_sampler(synthetic_octahedron_complex)
-        assert isinstance(s, SurfaceSampler)
+        assert isinstance(s, SurfaceFollowingSampler)
 
     def test_explicit_sphere_mode(self, synthetic_octahedron_complex):
         from maws.space import SurfaceSampler, make_sampler
@@ -412,6 +762,98 @@ class TestMakeSamplerModes:
                 mode="surface-following",
                 probe=-1.0,
             )
+
+    def test_a_site_centre_moves_the_sampling_region(
+        self, synthetic_octahedron_complex
+    ):
+        """Given a site, every pose is drawn around it.
+
+        The auto-sized region is a sphere on the target's centre of mass wide
+        enough to hold the whole target. Someone who knows where the binding
+        site is can spend the whole sample budget there instead.
+        """
+        from maws.space import make_sampler
+
+        centre = np.array([30.0, 0.0, 0.0])
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            mode="sphere",
+            site_centre=centre,
+            site_radius=4.0,
+            rng=0,
+        )
+        for _ in range(20):
+            assert np.linalg.norm(sampler.generator().position - centre) <= 4.0
+
+    def test_without_a_site_centre_the_region_holds_the_whole_target(
+        self, synthetic_octahedron_complex
+    ):
+        """The auto-sized region is unchanged when no site is given.
+
+        The fixture's atoms sit 5 A from the origin, so with reach 10 the
+        region is a sphere of radius 15 on the origin.
+        """
+        from maws.space import make_sampler
+
+        sampler = make_sampler(synthetic_octahedron_complex, mode="sphere", rng=0)
+        assert sampler.envelope.radius == 15.0
+        assert np.allclose(sampler.envelope.centre, [0.0, 0.0, 0.0])
+
+    def test_a_site_radius_alone_is_rejected(self, synthetic_octahedron_complex):
+        """A radius means nothing without the centre it belongs to."""
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="site_centre"):
+            make_sampler(synthetic_octahedron_complex, site_radius=4.0)
+
+    def test_rejects_a_non_positive_site_radius(self, synthetic_octahedron_complex):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="site_radius must be > 0"):
+            make_sampler(
+                synthetic_octahedron_complex,
+                site_centre=np.zeros(3),
+                site_radius=0.0,
+            )
+
+    def test_rejects_a_site_centre_that_is_not_a_point(
+        self, synthetic_octahedron_complex
+    ):
+        import pytest
+
+        from maws.space import make_sampler
+
+        with pytest.raises(ValueError, match="three"):
+            make_sampler(synthetic_octahedron_complex, site_centre=[1.0, 2.0])
+
+    def test_a_site_centre_also_aims_surface_following(
+        self, synthetic_octahedron_complex
+    ):
+        """A site narrows surface-following too, keeping both constraints.
+
+        Aiming at a site and hugging the surface are separate questions, so
+        asking for both gives poses that are near the site *and* against the
+        target: the most focused search available.
+        """
+        from maws.space import make_sampler
+
+        # The fixture's atoms sit 5 A out along each axis. Aim at the +x atom.
+        centre = np.array([5.0, 0.0, 0.0])
+        sampler = make_sampler(
+            synthetic_octahedron_complex,
+            mode="surface-following",
+            site_centre=centre,
+            site_radius=8.0,
+            d_max=6.0,
+            rng=0,
+        )
+        for _ in range(20):
+            pos = sampler.generator().position
+            assert np.linalg.norm(pos - centre) <= 8.0
 
     def test_both_modes_yield_clear_samples(self, synthetic_octahedron_complex):
         from maws.space import Excluder, make_sampler

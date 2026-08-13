@@ -8,10 +8,26 @@
 
 Two sampling modes are available:
 
+Both draw a point uniformly through the volume of a bounding sphere and keep it only if it lies outside the target's solvent-accessible surface. They differ in how far out into solvent a point may sit.
+
 | mode | what it does | when to pick it |
 |---|---|---|
-| `"sphere"` (default) | Bounding sphere envelope around the ligand COM, with an SAS-style rejection that skips candidates inside the protein bulk. | Default for most use cases. Fast (~40% rejection rate). Returns a [`SurfaceSampler`](#surfacesampler). |
-| `"surface-following"` (opt-in) | Same SAS rejection plus an outer cap that rejects candidates more than `d_max` Å from any protein atom. Accepted samples concentrate near the molecular surface. | Use when you need more samples close to the surface and can afford a higher rejection rate (~85%). Returns a [`SurfaceFollowingSampler`](#surfacefollowingsampler). |
+| `"surface-following"` (default) | Keeps a point only while some target atom lies within `d_max`, so accepted points form a band over the surface that dips into pockets and wraps around protrusions. | The default. Every pose can reach the target. ~85% rejection, 0.1–0.2 ms per accepted pose. Returns a [`SurfaceFollowingSampler`](#surfacefollowingsampler). |
+| `"sphere"` | Sphere on the target's centre of mass, radius `furthest atom + reach`. Every point outside the surface is kept, including open solvent well clear of the target. | Cheaper per draw (~0.02 ms) and reproduces pre-2026 behaviour. Returns a [`SurfaceSampler`](#surfacesampler). |
+
+The two limits measure different things, which is what makes the default follow the shape: `reach` extends the target's overall bounding radius, one number for the whole target, while `d_max` is measured from whichever atom is nearest the point.
+
+That difference is why one `d_max` serves every target while `reach` does not. Fraction of accepted poses landing more than 6 Å from the nearest target atom — too far for the strand to touch anything — over 4000 poses per cell:
+
+| target | heavy atoms | `reach=10` | `reach=6` | `reach=4` | `reach=2` | `d_max=6` |
+|---|---|---|---|---|---|---|
+| serotonin | 13 | 85.6% | 59.6% | 25.3% | 1.1% | **0.0%** |
+| cortisol | 26 | 87.0% | 68.6% | 47.0% | 16.8% | **0.0%** |
+| 1BRQ protein | 1408 | 87.7% | 81.4% | 77.1% | 71.0% | **0.0%** |
+
+Sphere mode wastes most of its budget at every target size, not just on proteins — for a small molecule the ball is mostly made of `reach`, since the padding is a fixed 10 Å added to a radius of only 4–7 Å. Shrinking `reach` rescues a small compact ligand but never a protein: a sphere is the wrong shape for something lumpy, and most of the volume inside the bounding radius sits in the concavities, which trimming the outer shell never reaches.
+
+Give a `site_centre` to narrow either mode to a known binding site.
 
 > **Note on prior shapes.** This module previously offered `Cube` and `Shell` envelopes. Both were measured on real targets (`notebooks/space_analysis.ipynb` on 1HAO) and dropped: `Cube` wasted its corners; `Shell`'s formula `inner = max(0, R_min - 5)` collapsed to 0 for every real protein, so it was just a sphere. The opt-in `surface-following` mode is the principled successor to the `Shell` idea.
 
@@ -111,27 +127,42 @@ flowchart LR
 make_sampler(
     complex_obj,                       # built ligand-only Complex
     *,
-    mode: Literal["sphere", "surface-following"] = "sphere",
+    mode: Literal["surface-following", "sphere"] = "surface-following",
     reach: float = 10.0,               # mode="sphere" only
     d_max: float = 6.0,                # mode="surface-following" only
     probe: float = 1.4,                # both modes
+    site_centre=None,                  # either mode
+    site_radius: float | None = None,  # with site_centre only
+    rng=None,                          # seed, Generator, or None
 )
 ```
 
-The factory. Picks the requested sampler, auto-sizes from `complex_obj.positions` + `complex_obj.topology.atoms()`, builds an `Excluder`, and returns a ready-to-use object. Raises `ValueError` on unknown `mode`, negative `reach`/`probe`, or non-positive `d_max`.
+The factory. Picks the requested sampler, auto-sizes from `complex_obj.positions` + `complex_obj.topology.atoms()`, builds an `Excluder`, and returns a ready-to-use object. Raises `ValueError` on unknown `mode`, negative `reach`/`probe`, non-positive `d_max`, or a `site_centre` that is not a point of three coordinates.
+
+Give `site_centre` when the binding site is known: the region becomes `site_radius` (default 15 Å) around that point, so the whole sample budget goes there. It applies to either mode, and pairing it with the default gives poses that are both near the site and against the surface.
+
+`rng` accepts a seed, a `numpy.random.Generator`, or `None`. Pass a seed to repeat a run.
 
 ```python
 import maws.space as space
 
-# Default sphere mode (most callers want this).
+# Default: poses hug the target's surface. Most callers want this.
 sampler = space.make_sampler(ligand_only_complex)
 pose = sampler.generator()
 print(pose.position, pose.axis, pose.angle)
 
-# Opt-in surface-following with a 4 Å band.
+# A tighter band, 4 Å from the surface.
+sampler = space.make_sampler(ligand_only_complex, d_max=4.0)
+pose = sampler.generator()
+
+# Aim at a known binding site, repeatably.
 sampler = space.make_sampler(
-    ligand_only_complex, mode="surface-following", d_max=4.0
+    ligand_only_complex, site_centre=[20.0, 46.5, -35.8], site_radius=12.0, rng=42
 )
+pose = sampler.generator()
+
+# The pre-2026 bounding-sphere behaviour.
+sampler = space.make_sampler(ligand_only_complex, mode="sphere", reach=10.0)
 pose = sampler.generator()
 ```
 
@@ -182,6 +213,32 @@ class Excluder:
 ```
 
 KDTree-backed SAS rejection: `is_clear(point)` is `True` iff `point` lies outside `(vdW + probe)` of every protein atom. vdW radii come from a built-in Bondi table; unknown elements fall back to a carbon-equivalent default (`1.70 A`) and emit a `RuntimeWarning` once per process per unknown symbol.
+
+## `ClashFilter`
+
+```python
+class ClashFilter:
+    def __init__(self, complex_obj, element, *, tolerance: float = 1.0): ...
+    def is_clear(self, positions: np.ndarray) -> bool: ...
+```
+
+`Excluder` answers a question about a *point*. What a pose puts at that point is a whole strand, tens of atoms across several angstrom, so a point can pass the SAS test while the atoms placed there sit inside the target. `ClashFilter` tests those atoms.
+
+`element` splits the complex: `[start, bond, end)` is the strand being placed, everything else is the rigid target. A pose is rejected when any strand atom and any target atom are closer than `vdW(i) + vdW(j) - tolerance`. Only strand-target pairs are tested.
+
+The default `tolerance` of `1.0 A` admits hydrogen bonds, which sit about `0.8 A` inside the summed radii, and rejects steric overlap. Raising it accepts harder contacts; `0` demands no overlap at all.
+
+## `draw_clear_conformation`
+
+```python
+draw_clear_conformation(
+    complex_obj, chain, sampler, rotations, clash, *, residue=0, max_rejections=1000
+) -> Sample
+```
+
+Draws a pose, places the strand, bends `residue` by a drawn set of torsion angles, and asks `clash` whether the result touches the target. Rejected attempts are redrawn from the strand's starting coordinates and raise `SamplingError` after `max_rejections`.
+
+Both steps happen before the test. On 1BRQ, testing the placement alone still left contacts at `0.36 A`: the torsions swing atoms far enough to reach back into the target.
 
 ## `SurfaceSampler`
 
@@ -240,10 +297,14 @@ The same parameters are exposed through both interfaces, with identical defaults
 
 | Flag (CLI)              | Kwarg (`MawsRunner`) | Default | Meaning |
 |-------------------------|----------------------|---------|---------|
+| `--sampler-mode MODE`   | `sampler_mode="surface-following"` | `"surface-following"` | Shape of the sampling region |
 | `--reach FLOAT`         | `reach=10.0`         | `10.0`  | A beyond `R_max` (sphere mode) |
+| `--d-max FLOAT`         | `d_max=6.0`          | `6.0`   | A from the surface (surface-following mode) |
+| `--site-centre X Y Z`   | `site_centre=None`   | `None`  | Narrow either mode to a known binding site |
+| `--site-radius FLOAT`   | `site_radius=None`   | `15.0`  | A from `site_centre` |
 | `--probe FLOAT`         | `probe=1.4`          | `1.4`   | vdW probe (A, water-like) |
-
-The `mode` and `d_max` parameters are currently library-only (not surfaced through `MawsRunner` or the CLI). To benchmark them on a different target, call `space.make_sampler` directly from a notebook.
+| `--clash-tolerance FLOAT` | `clash_tolerance=1.0` | `1.0` | Allowed vdW overlap before a pose is redrawn (A) |
+| `--seed INT`            | `seed=None`          | `None`  | Seed for every random draw |
 
 See [docs/run.md](run.md) for the runner-level table.
 

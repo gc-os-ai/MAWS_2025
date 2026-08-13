@@ -320,13 +320,9 @@ class TestPertMinMobileAtoms:
     (run.py), the distortion accumulated across growth steps.
     """
 
-    @pytest.fixture(autouse=True)
-    def _seeded_rng(self):
-        """``pert_min`` kicks from the global NumPy RNG, which nothing seeds.
-
-        Pin it so a failure here is reproducible rather than a one-off draw.
-        """
-        np.random.seed(20260727)
+    # Passed to every pert_min call here, so a failure is reproducible rather
+    # than a one-off draw.
+    SEED = 20260727
 
     @staticmethod
     def _complex_with_positions(n_atoms):
@@ -353,7 +349,7 @@ class TestPertMinMobileAtoms:
         before = self._as_array(cpx.positions)
 
         # Atoms 0-2 are the aptamer; 3-9 are the rigid target.
-        cpx.pert_min(size=0.5, iterations=5, atoms=range(0, 3))
+        cpx.pert_min(size=0.5, iterations=5, atoms=range(0, 3), rng=self.SEED)
 
         after = self._as_array(cpx.positions)
         assert np.array_equal(after[3:], before[3:]), "rigid atoms were perturbed"
@@ -364,7 +360,7 @@ class TestPertMinMobileAtoms:
         cpx = self._complex_with_positions(10)
         before = self._as_array(cpx.positions)
 
-        cpx.pert_min(size=0.5, iterations=1)
+        cpx.pert_min(size=0.5, iterations=1, rng=self.SEED)
 
         after = self._as_array(cpx.positions)
         assert not np.array_equal(after, before)
@@ -405,7 +401,7 @@ class TestPertMinMobileAtoms:
         cpx.positions = [mm.Vec3(*row) for row in coords] * unit.angstrom
         before = self._as_array(cpx.positions)
 
-        cpx.pert_min(size=0.5, iterations=3, atoms=range(n_mobile))
+        cpx.pert_min(size=0.5, iterations=3, atoms=range(n_mobile), rng=self.SEED)
 
         after = self._as_array(cpx.positions)
         # Coordinates round-trip Å -> nm -> Å through the OpenMM Context, so
@@ -429,7 +425,7 @@ class TestPertMinMobileAtoms:
         cpx.positions = [mm.Vec3(*row) for row in coords] * unit.angstrom
         cpx.minimize = lambda max_iterations=100: None
 
-        cpx.pert_min(size=0.1, iterations=1, atoms=range(2))
+        cpx.pert_min(size=0.1, iterations=1, atoms=range(2), rng=self.SEED)
 
         masses = [
             cpx.system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(6)

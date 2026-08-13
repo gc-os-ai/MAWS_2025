@@ -41,11 +41,17 @@ runner = MawsRunner(
 | `remove_h` | `bool` | `False` | Remove hydrogens |
 | `drop_hetatm` | `bool` | `False` | Drop HETATM records |
 | `verbose` | `bool` | `False` | Log progress at INFO instead of DEBUG |
+| `sampler_mode` | `"surface-following"` or `"sphere"` | `"surface-following"` | Shape of the region poses are drawn from |
 | `reach` | `float` | `10.0` | Distance the envelope extends past the ligand surface (Å) |
+| `d_max` | `float` | `6.0` | How far from the surface a pose may sit (Å), for `surface-following` |
+| `site_centre` | `sequence of 3 floats` | `None` | Sample around this point instead of the whole target (Å) |
+| `site_radius` | `float` | `15.0` | How far the region reaches from `site_centre` (Å) |
 | `probe` | `float` | `1.4` | vdW probe radius for SAS rejection (Å, water-equivalent) |
+| `clash_tolerance` | `float` | `1.0` | How far the placed strand may overlap the target's vdW spheres before the pose is redrawn (Å) |
 | `salt_conc` | `float` | `0.15` | Monovalent salt conc. (mol/L) for GB Debye–Hückel screening; `0` = unscreened |
+| `seed` | `int` | `None` | Seed for every random draw. Omit it and the run draws one, logs it, and returns it on `MawsResult` |
 
-The constructor raises `ValueError` for `num_nucleotides <= 0`, a non-positive chunk size, or a negative `reach`, `probe`, or `salt_conc`.
+The constructor raises `ValueError` for `num_nucleotides <= 0`, a non-positive chunk size, or a negative `reach`, `probe`, `clash_tolerance`, or `salt_conc`, and `TypeError` for a non-integer `seed`. The sampler arguments are checked when `run()` builds the sampler.
 
 The ligand PDB path is **not** a constructor argument — it is passed to `run()`, so one configured runner can be reused across several ligands.
 
@@ -56,13 +62,32 @@ The ligand PDB path is **not** a constructor argument — it is passed to `run()
 > from prior versions unless you pass `salt_conc=0.0` (`--salt-conc 0` on the
 > CLI). The screening is monovalent only and does not model Mg²⁺.
 
-> **Note (2026):** the initial pose search now restricts samples to the
-> region just outside the ligand surface, computed automatically from
-> the ligand atoms. `reach` and `probe` tune that region; defaults work
-> for most targets. An opt-in `surface-following` sampling mode is also
-> available from the library (`maws.space.make_sampler(..., mode=...)`)
-> but is not exposed through `MawsRunner`. See
+> **Note (2026): behavior change.** `sampler_mode` defaults to
+> `"surface-following"`, which keeps every pose within `d_max` (6 Å) of the
+> target's surface. Earlier releases drew poses from a bounding sphere, most
+> of whose volume is open solvent: measured over 4000 poses per target,
+> **85.6%** (serotonin), **87.0%** (cortisol) and **87.7%** (a 1408-atom
+> protein) landed more than 6 Å from the nearest target atom, too far for the
+> strand to touch anything. Sequences selected under the old default will
+> differ. Pass `sampler_mode="sphere"` (`--sampler-mode sphere`) to restore it.
+>
+> One `d_max` suits every target size, because it is measured from the nearest
+> atom rather than from the target's overall radius. `reach` is not
+> size-invariant in the same way and applies to `"sphere"` only.
+
+> **Note (2026):** give a `site_centre` to spend the whole sample budget on a
+> known binding site. It works with either mode; combined with the default it
+> gives poses that are both near the site and against the surface. See
 > [docs/space.md](space.md) for the underlying API.
+
+> **Note (2026):** a pose whose atoms overlap the target is thrown away and
+> redrawn before it costs an energy evaluation. `clash_tolerance` sets how
+> much overlap counts as a clash: the default 1.0 Å admits hydrogen bonds,
+> which sit about 0.8 Å inside the summed van der Waals radii.
+
+> **Note (2026):** every run is reproducible. Pass `seed` to repeat one; omit
+> it and the run draws a seed, logs it as `Random seed: ...`, and returns it
+> on `MawsResult`, so a run can be repeated after the fact.
 
 #### MawsRunner.run
 
@@ -88,6 +113,7 @@ Frozen dataclass returned by `MawsRunner.run`.
 | `energy` | `float` | Energy of the final best configuration; `nan` if no candidate was scored |
 | `entropy` | `float` | Entropy score used for selection (`maws.routines.entropy_score`; ≤ 0, lower is better) |
 | `pdb_path` | `str \| None` | Path to the written PDB, or `None` when `output_pdb` was not given |
+| `seed` | `int \| None` | The seed the run used. Pass it back as `MawsRunner(seed=...)` to reproduce this result |
 
 ## Usage Examples
 

@@ -10,7 +10,8 @@ import copy
 import logging
 from datetime import datetime
 
-from openmm import app, unit
+import numpy as np
+from openmm import app
 
 import maws.space as space
 from maws.complex import Complex
@@ -112,10 +113,70 @@ def parse_args():
         help="How far the envelope extends beyond the ligand surface (Å). Default: 10.",
     )
     parser.add_argument(
+        "--sampler-mode",
+        type=str,
+        default="surface-following",
+        choices=["sphere", "surface-following"],
+        help=(
+            "Shape of the region poses are drawn from. 'surface-following' "
+            "keeps poses within --d-max of the target's surface; 'sphere' "
+            "fills a ball around the target, most of which is open solvent. "
+            "Default: surface-following."
+        ),
+    )
+    parser.add_argument(
+        "--d-max",
+        type=_non_negative_float,
+        default=6.0,
+        help=(
+            "How far from the target's surface a pose may sit (Å), for "
+            "--sampler-mode surface-following. Default: 6."
+        ),
+    )
+    parser.add_argument(
+        "--site-centre",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        default=None,
+        help=(
+            "Sample around this point instead of the whole target, in the "
+            "input PDB's coordinates (Å). Give it when the binding site is "
+            "known, so the whole sample budget is spent there."
+        ),
+    )
+    parser.add_argument(
+        "--site-radius",
+        type=_non_negative_float,
+        default=None,
+        help="How far the region reaches from --site-centre (Å). Default: 15.",
+    )
+    parser.add_argument(
         "--probe",
         type=_non_negative_float,
         default=1.4,
         help="vdW probe radius for SAS rejection (Å). Default: 1.4 (water-like).",
+    )
+    parser.add_argument(
+        "--clash-tolerance",
+        type=_non_negative_float,
+        default=1.0,
+        help=(
+            "How far the placed strand may overlap the target's vdW spheres "
+            "before the pose is thrown away and redrawn (Å). Default: 1.0, "
+            "which admits hydrogen bonds and rejects steric clashes. "
+            "0 demands no overlap at all."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for every random draw, making the run repeatable. "
+            "Default: a fresh seed each run, reported in the log so the run "
+            "can still be repeated afterwards."
+        ),
     )
     parser.add_argument(
         "--salt-conc",
@@ -124,7 +185,7 @@ def parse_args():
         help=(
             "Monovalent salt concentration (mol/L) for GB implicit-solvent "
             "Debye-Hückel screening. Default: 0.15 (physiological); 0 = unscreened. "
-            "Monovalent only (does not model Mg²⁺)."
+            "Monovalent only (only models Na+)."
         ),
     )
     return parser.parse_args()
@@ -143,6 +204,11 @@ def main():
     APTAMER_TYPE = args.aptamertype
     MOLECULE_TYPE = args.moleculetype
     N_ELEMENTS = 4  # rotatable backbone torsions per residue
+
+    # A run with no --seed still gets one, so its result can be reproduced
+    # from the log afterwards.
+    seed = np.random.SeedSequence().entropy if args.seed is None else args.seed
+    rng = np.random.default_rng(seed)
 
     # ---------------- Logging configuration ----------------
     logger = logging.getLogger("maws")
@@ -196,6 +262,7 @@ def main():
         )
         logger.info("Value of beta: %s", BETA)
         logger.info("Salt concentration (GB screening, mol/L): %s", args.salt_conc)
+        logger.info("Random seed: %s", seed)
         logger.info("Start time: %s", datetime.now())
 
         # Choose aptamer FF and residue
@@ -255,8 +322,17 @@ def main():
         c.build()
 
         # Surface-aware sampler around the ligand (auto-sized envelope + SAS rejection)
-        sampler = space.make_sampler(c, reach=args.reach, probe=args.probe)
-        rotations = space.NAngles(N_ELEMENTS)
+        sampler = space.make_sampler(
+            c,
+            mode=args.sampler_mode,
+            reach=args.reach,
+            d_max=args.d_max,
+            site_centre=args.site_centre,
+            site_radius=args.site_radius,
+            probe=args.probe,
+            rng=rng,
+        )
+        rotations = space.NAngles(N_ELEMENTS, rng=rng)
 
         # Tracking best candidate
         best_entropy = None
@@ -284,17 +360,13 @@ def main():
 
             # Remember initial positions
             positions0 = cx.positions[:]
+            clash = space.ClashFilter(
+                cx, aptamer.element, tolerance=args.clash_tolerance
+            )
 
             # Sample orientations/rotations
             for _ in range(FIRST_CHUNK_SIZE):
-                pose = sampler.generator()
-                rotation = rotations.generator()
-
-                cx.translate_global(aptamer.element, pose.position * unit.angstrom)
-                cx.rotate_global(aptamer.element, pose.axis * unit.angstrom, pose.angle)
-
-                for j in range(N_ELEMENTS):
-                    aptamer.rotate_in_residue(0, j, rotation[j])
+                space.draw_clear_conformation(cx, aptamer, sampler, rotations, clash)
 
                 energy = cx.get_energy()[0]
                 if free_E is None or energy < free_E:
@@ -375,6 +447,7 @@ def main():
                     cx.pert_min(
                         size=0.5,
                         atoms=range(aptamer.element[0], aptamer.element[2]),
+                        rng=rng,
                     )
 
                     positions0 = cx.positions[:]
