@@ -889,7 +889,9 @@ class BuiltSystem:
                 f"{', '.join(self._views)}"
             ) from None
 
-    def energy_model(self, *, platform: str | None = None) -> EnergyModel:
+    def energy_model(
+        self, *, platform: str | None = None, freeze: str | None = None
+    ) -> EnergyModel:
         """Build an OpenMM energy model for this system.
 
         Parameters
@@ -897,6 +899,12 @@ class BuiltSystem:
         platform : str, optional
             OpenMM platform name to force, e.g. ``"CPU"``. By default the
             fastest available is chosen.
+        freeze : str, optional
+            Name of a chain to hold in place while settling, normally the
+            target. The search compares candidates by how each one sits
+            against the same target, so a target that reshapes itself
+            differently for each of them is not the same target. Nothing is
+            held in place by default.
 
         Returns
         -------
@@ -923,5 +931,8 @@ class BuiltSystem:
         from maws.energy import OpenMMEnergy
 
         return OpenMMEnergy.from_prmtop(
-            self._amber.prmtop_path, self._forcefield, platform=platform
+            self._amber.prmtop_path,
+            self._forcefield,
+            platform=platform,
+            frozen=None if freeze is None else self.chain(freeze).span,
         )

@@ -44,7 +44,8 @@ import numpy as np
 
 from maws.energy import EnergyModel, Relaxed
 from maws.errors import ConfigurationError
-from maws.pose import Pose
+from maws.pose import ChainView, Pose
+from maws.values import AtomRange
 
 __all__ = ["perturb_and_minimize"]
 
@@ -56,10 +57,11 @@ def perturb_and_minimize(
     size: float = 0.1,
     iterations: int = 50,
     max_iterations: int = 100,
+    moving: AtomRange | ChainView | None = None,
     rng: np.random.Generator | None = None,
 ) -> Relaxed:
     """perturb_and_minimize(pose, energy, *, size=0.1, iterations=50,
-                         max_iterations=100, rng=None) -> Relaxed
+                         max_iterations=100, moving=None, rng=None) -> Relaxed
 
     Nudge every atom at random and settle the structure, repeatedly.
 
@@ -85,6 +87,10 @@ def perturb_and_minimize(
     max_iterations : int, default=100
         How many adjustment steps to allow before stopping, within each single
         settling. Raising it settles each round more thoroughly and costs more.
+    moving : maws.values.AtomRange or maws.pose.ChainView, optional
+        Which atoms to nudge. Normally the strand, so that the target it is
+        being fitted against is not shaken about as well. Every atom is nudged
+        by default.
     rng : numpy.random.Generator, optional
         Source of randomness. Pass one built with a fixed seed to make a run
         repeatable. Defaults to a fresh generator, so runs differ.
@@ -136,8 +142,26 @@ def perturb_and_minimize(
     generator = rng if rng is not None else np.random.default_rng()
     result = Relaxed(energy.evaluate(pose), pose)
     for _ in range(iterations):
-        nudged = result.pose.jittered(
-            generator.uniform(-size, size, result.pose.xyz.shape)
+        offsets = np.zeros(result.pose.xyz.shape)
+        rows = slice(None) if moving is None else _span_of(moving).as_slice()
+        offsets[rows] = generator.uniform(-size, size, offsets[rows].shape)
+        result = energy.minimize(
+            result.pose.jittered(offsets), max_iterations=max_iterations
         )
-        result = energy.minimize(nudged, max_iterations=max_iterations)
     return result
+
+
+def _span_of(where: AtomRange | ChainView) -> AtomRange:
+    """Return the run of atoms named by a span or by a chain.
+
+    Parameters
+    ----------
+    where : maws.values.AtomRange or maws.pose.ChainView
+        Either a run of atom numbers, or a chain that has one.
+
+    Returns
+    -------
+    maws.values.AtomRange
+        The run of atom numbers.
+    """
+    return where if isinstance(where, AtomRange) else where.span

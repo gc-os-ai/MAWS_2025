@@ -21,10 +21,12 @@ import numpy as np
 import pytest
 
 from maws.build import LeapBuilder
+from maws.energy import OpenMMEnergy
+from maws.errors import ConfigurationError
 from maws.forcefield import ForceField
 from maws.libraries import rna
 from maws.topology import Assembly
-from maws.values import NucleotideSequence
+from maws.values import AtomRange, NucleotideSequence
 
 pytestmark = pytest.mark.integration
 
@@ -154,6 +156,83 @@ class TestRealEnergy:
             system.amber.prmtop_path, screened, platform="CPU"
         ).evaluate(system.pose)
         assert without != pytest.approx(with_salt)
+
+
+@needs_leap
+class TestHoldingTheTargetStill:
+    """Settling must not reshape the molecule the strand is being fitted to.
+
+    Every candidate is scored against the same target. If settling let the
+    target relax its own internal strain, it would do so differently for each
+    candidate, by hundreds of kJ/mol and for reasons that have nothing to do
+    with how well the strand fits. What is compared would no longer be the fit.
+    """
+
+    HELD = AtomRange(0, 32)
+    """The first residue of the two-nucleotide strand built below.
+
+    A second chain would be the realistic case, but building one needs a
+    target file; freezing part of one chain exercises the same mechanism and
+    has the advantage that the atoms held and the atoms free are bonded to
+    each other, so nothing could hold still by simply being far away.
+    """
+
+    @pytest.fixture
+    def strand(self, leap_builder, forcefield):
+        """A two-nucleotide strand, built for real."""
+        return leap_builder.build(Assembly().with_aptamer(rna(), "G A"), forcefield)
+
+    def test_frozen_atoms_come_back_where_they_started(self, strand):
+        """They do not move at all, to within a hundred-millionth of an ångström.
+
+        Not bit-for-bit: MAWS measures in ångström and OpenMM in nanometres,
+        so every position is multiplied by ten on the way in and divided by
+        ten on the way out, which moves the last bit of about a third of them.
+        The tolerance is eight orders of magnitude below the movement the same
+        settling produces when nothing is held.
+        """
+        model = OpenMMEnergy.from_prmtop(
+            strand.amber.prmtop_path,
+            strand.forcefield,
+            platform="CPU",
+            frozen=self.HELD,
+        )
+        settled = model.minimize(strand.pose, max_iterations=50).pose
+        np.testing.assert_allclose(
+            settled.atoms(self.HELD), strand.pose.atoms(self.HELD), atol=1e-9
+        )
+
+    def test_the_rest_still_settles_while_they_are_held(self, strand):
+        """Otherwise freezing part of a structure would have frozen all of it."""
+        free = AtomRange(self.HELD.stop, strand.n_atoms)
+        model = OpenMMEnergy.from_prmtop(
+            strand.amber.prmtop_path,
+            strand.forcefield,
+            platform="CPU",
+            frozen=self.HELD,
+        )
+        settled = model.minimize(strand.pose, max_iterations=50).pose
+        assert not np.allclose(settled.atoms(free), strand.pose.atoms(free), atol=1e-9)
+
+    def test_without_freezing_those_atoms_move(self, strand):
+        """The behaviour being corrected, written down so it stays corrected."""
+        model = OpenMMEnergy.from_prmtop(
+            strand.amber.prmtop_path, strand.forcefield, platform="CPU"
+        )
+        settled = model.minimize(strand.pose, max_iterations=50).pose
+        assert not np.allclose(
+            settled.atoms(self.HELD), strand.pose.atoms(self.HELD), atol=1e-9
+        )
+
+    def test_freezing_atoms_that_do_not_exist_is_rejected(self, strand):
+        """A span past the end of the structure is a mistake, caught at once."""
+        with pytest.raises(ConfigurationError, match="cannot freeze atoms"):
+            OpenMMEnergy.from_prmtop(
+                strand.amber.prmtop_path,
+                strand.forcefield,
+                platform="CPU",
+                frozen=AtomRange(0, strand.n_atoms + 1),
+            )
 
 
 @needs_leap

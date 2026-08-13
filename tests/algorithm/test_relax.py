@@ -111,6 +111,58 @@ class TestPerturbAndMinimize:
         perturb_and_minimize(start, scorer, size=0.5, iterations=5, rng=rng)
         assert start.xyz == pytest.approx(before)
 
+    def test_only_the_named_atoms_are_nudged(
+        self, start, scorer, one_residue_system, rng
+    ):
+        """The target is not a thing being fitted; it is what fits are judged
+        against.
+
+        Shaking it about as well would move the goalposts, and would do it
+        differently for each candidate the search compares.
+        """
+        target = one_residue_system.chain("ligand").span
+        result = perturb_and_minimize(
+            start,
+            scorer,
+            size=0.5,
+            iterations=5,
+            moving=one_residue_system.chain("aptamer"),
+            rng=rng,
+        )
+        np.testing.assert_array_equal(result.pose.atoms(target), start.atoms(target))
+
+    def test_the_named_atoms_really_do_move(
+        self, start, scorer, one_residue_system, rng
+    ):
+        """Otherwise the test above would pass with the nudging switched off."""
+        strand = one_residue_system.chain("aptamer").span
+        result = perturb_and_minimize(
+            start,
+            scorer,
+            size=0.5,
+            iterations=5,
+            moving=one_residue_system.chain("aptamer"),
+            rng=rng,
+        )
+        assert not np.allclose(result.pose.atoms(strand), start.atoms(strand))
+
+    def test_a_span_names_the_same_atoms_as_the_chain_holding_it(
+        self, start, scorer, one_residue_system
+    ):
+        """Either way of naming the atoms gives the same shake."""
+        chain = one_residue_system.chain("aptamer")
+        by_chain = perturb_and_minimize(
+            start, scorer, iterations=3, moving=chain, rng=np.random.default_rng(0)
+        )
+        by_span = perturb_and_minimize(
+            start,
+            scorer,
+            iterations=3,
+            moving=chain.span,
+            rng=np.random.default_rng(0),
+        )
+        np.testing.assert_array_equal(by_chain.pose.xyz, by_span.pose.xyz)
+
     def test_a_negative_nudge_is_rejected(self, start, scorer):
         """A distance below zero has no meaning."""
         with pytest.raises(ConfigurationError, match="size must not be negative"):

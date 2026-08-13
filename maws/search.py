@@ -150,7 +150,9 @@ def stub_energy(
     return make
 
 
-def openmm_energy(*, platform: str | None = None) -> EnergyFactory:
+def openmm_energy(
+    *, platform: str | None = None, freeze: str | None = "ligand"
+) -> EnergyFactory:
     """Return a factory producing real scorers backed by OpenMM.
 
     Parameters
@@ -158,6 +160,9 @@ def openmm_energy(*, platform: str | None = None) -> EnergyFactory:
     platform : str, optional
         Which OpenMM compute backend to use, e.g. ``"CPU"``. By default the
         fastest available is chosen.
+    freeze : str or None, default="ligand"
+        Name of the chain to hold in place while settling, normally the
+        target. Pass None to let every atom move.
 
     Returns
     -------
@@ -170,10 +175,20 @@ def openmm_energy(*, platform: str | None = None) -> EnergyFactory:
     maws.errors.ConfigurationError
         When called with a structure that was not built by AmberTools, and so
         has no parameters for OpenMM to read.
+
+    Notes
+    -----
+    Freezing the target is what makes the candidates comparable. Settling a
+    structure moves every atom that is free to move, and the target has far
+    more atoms than the strand does, so an unfrozen target relaxes its own
+    internal strain by hundreds of kJ/mol — differently for each candidate,
+    and quite independently of how well the strand fits it. Held in place, its
+    contribution is the same number every time and cancels out of the
+    comparison.
     """
 
     def make(system: BuiltSystem) -> EnergyModel:
-        return system.energy_model(platform=platform)
+        return system.energy_model(platform=platform, freeze=freeze)
 
     return make
 
@@ -698,6 +713,7 @@ def _grow_candidate(
     )
     model = energy(grown.system)
 
+    chain = grown.system.chain(role)
     start = grown.pose
     if relax_iterations:
         start = perturb_and_minimize(
@@ -705,10 +721,10 @@ def _grow_candidate(
             model,
             size=relax_size,
             iterations=relax_iterations,
+            moving=chain,
             rng=rng,
         ).pose
 
-    chain = grown.system.chain(role)
     torsions = _growth_torsions(chain, direction, n_torsions)
 
     energies: list[float] = []

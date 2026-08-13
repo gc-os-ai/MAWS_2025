@@ -260,6 +260,12 @@ class OpenMMEnergy:
     platform : str, optional
         Which OpenMM compute backend to use, e.g. ``"CPU"`` or ``"CUDA"``. By
         default the fastest available is chosen.
+    frozen : maws.values.AtomRange, optional
+        Atoms that must not move when :meth:`minimize` settles the structure.
+        Normally the target: the search compares candidates by how well each
+        sits against the same target, and a target that reshapes itself
+        differently for each one is not the same target. Nothing is frozen by
+        default.
 
     See Also
     --------
@@ -270,6 +276,12 @@ class OpenMMEnergy:
     -----
     Creating one of these builds an OpenMM simulation, which takes noticeably
     longer than a single evaluation. Build it once and reuse it.
+
+    Freezing is done by setting an atom's mass to zero, which is how OpenMM is
+    told an atom is held in place. Frozen atoms still contribute to the energy,
+    exactly as they did before; they simply do not move. Their contribution is
+    the same number for every candidate, so it shifts every energy by a
+    constant and changes no comparison.
     """
 
     __slots__ = ("_simulation", "_system", "_topology")
@@ -280,6 +292,7 @@ class OpenMMEnergy:
         forcefield: ForceField,
         *,
         platform: str | None = None,
+        frozen: AtomRange | None = None,
     ) -> None:
         import openmm as mm
         from openmm import app, unit
@@ -291,6 +304,15 @@ class OpenMMEnergy:
             implicitSolvent=app.OBC1,
             implicitSolventSaltConc=forcefield.salt_conc * unit.molar,
         )
+        if frozen is not None:
+            n_atoms = self._system.getNumParticles()
+            if frozen.stop > n_atoms:
+                raise ConfigurationError(
+                    f"cannot freeze atoms {frozen.start}-{frozen.stop}; the "
+                    f"structure has only {n_atoms}"
+                )
+            for index in range(frozen.start, frozen.stop):
+                self._system.setParticleMass(index, 0.0)
         self._topology: Topology = prmtop.topology  # type: ignore[attr-defined]
         integrator = mm.LangevinIntegrator(
             300.0 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
@@ -309,6 +331,7 @@ class OpenMMEnergy:
         forcefield: ForceField,
         *,
         platform: str | None = None,
+        frozen: AtomRange | None = None,
     ) -> OpenMMEnergy:
         """Build a scorer by reading an AMBER parameter file from disk.
 
@@ -321,6 +344,8 @@ class OpenMMEnergy:
             The run's force field settings.
         platform : str, optional
             Which OpenMM compute backend to use.
+        frozen : maws.values.AtomRange, optional
+            Atoms to hold in place when settling. See the class docstring.
 
         Returns
         -------
@@ -329,7 +354,12 @@ class OpenMMEnergy:
         """
         from openmm import app
 
-        return cls(app.AmberPrmtopFile(str(path)), forcefield, platform=platform)
+        return cls(
+            app.AmberPrmtopFile(str(path)),
+            forcefield,
+            platform=platform,
+            frozen=frozen,
+        )
 
     @property
     def topology(self) -> Topology:
@@ -370,7 +400,8 @@ class OpenMMEnergy:
         Returns
         -------
         Relaxed
-            The settled positions and their energy.
+            The settled positions and their energy. Any atoms this scorer was
+            built to freeze come back exactly where they were.
         """
         from openmm import unit
 
