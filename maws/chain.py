@@ -258,50 +258,44 @@ class Chain:
         ]
 
     def rotate_element(self, element, angle: float, reverse: bool = False):
-        """
-        Rotate a chain-local element by ``angle`` radians.
+        """Turn one bond of this chain by `angle` radians.
 
         Parameters
         ----------
-        element : list[int | None]
-            Triple ``[start, bond, end_or_None]`` **relative to this chain**.
-            - ``start`` : first atom index (inclusive)
-            - ``bond``  : atom forming the rotation axis with ``start``
-            - ``end``   : one-past-last atom index (exclusive). If ``None``,
-              the element extends to the end of the chain.
+        element : sequence of int
+            ``[first, second]`` atom indices naming the bond to turn, counted
+            from the start of this chain. Longer sequences are accepted and
+            the extra entries ignored.
         angle : float
-            Rotation angle in radians.
+            How far to turn, in radians.
         reverse : bool, default=False
-            If ``True`` and ``end`` is ``None``, rotate the **complement** of
-            the specified range (the part *not* selected).
+            Turn the part of the molecule joined to `first` rather than the
+            part joined to `second`.
+
+        Raises
+        ------
+        ValueError
+            If fewer than two indices are given.
+
+        See Also
+        --------
+        rotate_in_residue : Names a bond by residue and torsion instead.
+        maws.complex.Complex.rotate_element : Does the work.
 
         Notes
         -----
-        This method converts chain-local indices to **global** atom indices by
-        adding ``self.start``, then delegates to :meth:`Complex.rotate_element`.
+        Indices are counted from the start of this chain; they are shifted to
+        whole-Complex indices here.
         """
-        revised_element = element[:]
-        rev = reverse
-        if rev:
-            # Special handling: encode "complement" rotation into indices
-            if revised_element[2] is None:
-                revised_element[2] = 0
-            else:
-                revised_element[2] = revised_element[1]
-        rev = False
-
-        if len(revised_element) == 3 and revised_element[2] is not None:
-            revised_element = [idx + self.start for idx in revised_element]
-            self.complex.rotate_element(revised_element, angle, reverse=rev)
-        elif len(revised_element) == 3 and revised_element[2] is None:
-            revised_element = [
-                revised_element[0] + self.start,
-                revised_element[1] + self.start,
-                self.length + self.start,
-            ]
-            self.complex.rotate_element(revised_element, angle, reverse=rev)
-        else:
-            raise ValueError("Rotable element contains too many or too few components!")
+        if len(element) < 2:
+            raise ValueError(
+                f"A bond needs two atom indices; got {len(element)}: {list(element)}"
+            )
+        self.complex.rotate_element(
+            [element[0] + self.start, element[1] + self.start],
+            angle,
+            reverse=reverse,
+        )
 
     def rotate_in_residue(
         self,
@@ -310,66 +304,53 @@ class Chain:
         angle: float,
         reverse: bool = False,
     ):
-        """
-        Rotate one of the template-defined torsions **inside a specific residue**.
+        """Turn one of a residue's named bonds by `angle` radians.
 
         Parameters
         ----------
         residue_index : int
-            Index of the residue within this chain. Negative values count from
-            the end (Python-style).
+            Which residue of this chain, counting from zero. Negative values
+            count back from the last residue.
         residue_element_index : int
-            Which torsion to rotate for that residue **type**; an index into
-            ``Structure.rotating_elements[resname]``.
+            Which of that residue's turnable bonds, counting from zero, in the
+            order its :class:`~maws.structure.Structure` lists them.
         angle : float
-            Rotation angle in radians.
+            How far to turn, in radians.
         reverse : bool, default=False
-            If ``True`` and the torsion has ``end=None``, rotate the complement.
+            Turn the part of the molecule joined to the bond's first atom
+            rather than the part joined to its second.
+
+        Raises
+        ------
+        IndexError
+            If either index is out of range for this chain or residue.
+
+        See Also
+        --------
+        maws.structure.Structure.torsions : Lists a residue's turnable bonds.
 
         Notes
         -----
-        The torsion triple is stored **residue-local** in the :class:`Structure`.
-        This method normalizes any negative atom indices using the residue's
-        length, translates them to **chain-local** using ``residues_start``, and
-        then calls :meth:`rotate_element` to perform the actual rotation.
+        A residue's bonds are stored as atom indices counted from the start of
+        that residue, with negative values counting back from its end. Both
+        are resolved here and shifted to indices counted across the whole
+        chain.
         """
-        rev = reverse
-        revised_residue_index = residue_index
         if residue_index < 0:
-            revised_residue_index += len(self.sequence_array)
+            residue_index += len(self.sequence_array)
 
-        element = self.structure.rotating_elements[
-            self.sequence_array[revised_residue_index]
-        ][residue_element_index]
+        residue_name = self.sequence_array[residue_index]
+        residue_length = self.structure.residue_length[residue_name]
+        offset = self.residues_start[residue_index]
+        bond = self.structure.rotating_elements[residue_name][residue_element_index]
 
-        # Normalize possibly negative indices within the residue
-        for i in range(len(element)):
-            if element[i] and element[i] < 0:
-                element[i] += self.structure.residue_length[
-                    self.sequence_array[revised_residue_index]
-                ]
-
-            if element[2] is None:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    None,
-                ]
-            elif element[2] == 0:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    element[2],
-                ]
-            else:
-                revised_element = [
-                    element[0] + self.residues_start[revised_residue_index],
-                    element[1] + self.residues_start[revised_residue_index],
-                    element[2] + self.residues_start[revised_residue_index],
-                ]
-                rev = False
-
-            self.rotate_element(revised_element, angle, reverse=rev)
+        # Build a new list rather than resolving in place: rotating_elements
+        # holds one entry per residue type, shared by every chain using it.
+        self.rotate_element(
+            [(atom + residue_length if atom < 0 else atom) + offset for atom in bond],
+            angle,
+            reverse=reverse,
+        )
 
     # ---- Compatibility helpers---------------------------
 

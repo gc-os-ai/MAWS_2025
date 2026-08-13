@@ -119,23 +119,23 @@ class TestResolveIndex:
 class TestTorsions:
     """Tests for Structure.torsions() method."""
 
-    def test_torsions_returns_rotation_triples(self):
-        """torsions() returns normalized rotation triples."""
+    def test_torsions_returns_atom_index_pairs(self):
+        """torsions() returns one atom-index pair per turnable bond."""
         struct = Structure(
             ["RES"],
             residue_length=[20],
-            rotating_elements=[
-                ("RES", 0, 1, None),  # (start, bond, end)
-                ("RES", 5, 10, -5),  # end=-5 → 20-5=15
-            ],
+            rotating_elements=[("RES", 0, 1), ("RES", 5, 10)],
         )
-        torsions = struct.torsions("RES")
-        # Should have 2 torsions
-        assert len(torsions) == 2
-        # First: (0, 1, None)
-        assert torsions[0] == (0, 1, None)
-        # Second: end=-5 normalized to 15
-        assert torsions[1] == (5, 10, 15)
+        assert struct.torsions("RES") == [(0, 1), (5, 10)]
+
+    def test_torsions_resolves_negative_indices(self):
+        """torsions() counts a negative index back from the residue's end."""
+        struct = Structure(
+            ["RES"],
+            residue_length=[20],
+            rotating_elements=[("RES", -5, -2)],  # 20-5=15, 20-2=18
+        )
+        assert struct.torsions("RES") == [(15, 18)]
 
 
 class TestConnectivity:
@@ -179,3 +179,19 @@ class TestConnectivity:
         assert result[0] == 18
         assert result[1] == 0
         assert result[2] == pytest.approx(1.6)
+
+
+class TestAddRotationDispatch:
+    """Tests for how add_rotation() tells one bond from several."""
+
+    def test_a_list_of_two_bonds_is_not_read_as_one_bond(self):
+        """Two bonds passed together are recorded as two, not merged into one."""
+        struct = Structure(["RES"], residue_length=[20])
+        struct.add_rotation("RES", [(2, 3), (3, 4)])
+        assert struct.rotating_elements["RES"] == [[2, 3], [3, 4]]
+
+    def test_a_single_bond_is_recorded_once(self):
+        """One bond passed on its own is recorded as one."""
+        struct = Structure(["RES"], residue_length=[20])
+        struct.add_rotation("RES", (1, 2))
+        assert struct.rotating_elements["RES"] == [[1, 2]]

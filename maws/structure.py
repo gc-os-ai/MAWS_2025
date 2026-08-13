@@ -18,13 +18,13 @@ from typing import TypeAlias
 ResidueName: TypeAlias = str
 AtomIndex: TypeAlias = int  # 0-based; negative = from end
 
-RotationSpec: TypeAlias = tuple[ResidueName, AtomIndex, AtomIndex, AtomIndex | None]
+RotationSpec: TypeAlias = tuple[ResidueName, AtomIndex, AtomIndex]
 BackboneSpec: TypeAlias = tuple[
     ResidueName, AtomIndex, AtomIndex, AtomIndex, AtomIndex, AtomIndex
 ]
 BackboneEntry: TypeAlias = list[list[int]]
-RotTripleStored: TypeAlias = list[int | None]
-RotListStored: TypeAlias = list[RotTripleStored]
+RotBondStored: TypeAlias = list[int]
+RotListStored: TypeAlias = list[RotBondStored]
 AliasEntry: TypeAlias = list[str]
 ConnectEntry: TypeAlias = list[list[int] | float]
 
@@ -40,7 +40,9 @@ class Structure:
     residue_length : Sequence[int], optional
         Atom count per residue.
     rotating_elements : Sequence[RotationSpec], optional
-        Torsion definitions: (residue, start, bond, end_or_None).
+        Turnable bonds, as ``(residue, first_atom, second_atom)``. The two
+        atom indices name the bond; which atoms move when it turns is read
+        from the built molecule, not declared here.
     backbone_elements : Sequence[BackboneSpec], optional
         Connection anchors for polymer growth.
     connect : Sequence[ConnectEntry], optional
@@ -122,15 +124,15 @@ class Structure:
             self.rotating_elements[name] = [None]  # sentinel
 
         if rotating_elements:
-            for residue, start, bond, end in rotating_elements:
+            for residue, first, second in rotating_elements:
                 if self.rotating_elements[residue] == [None]:
-                    self.rotating_elements[residue] = [[start, bond, end]]
+                    self.rotating_elements[residue] = [[first, second]]
                 elif self.rotating_elements.get(residue) is None:
                     raise ValueError(
                         "Residue does not exist! CANNOT assign rotability!"
                     )
                 else:
-                    self.rotating_elements[residue].append([start, bond, end])
+                    self.rotating_elements[residue].append([first, second])
 
         # Map residue -> normalized backbone entry:
         # [[start, middle_pre, bond], [middle_post, end]] with all indices >= 0
@@ -162,55 +164,70 @@ class Structure:
     def add_rotation(
         self,
         residue_name: ResidueName,
-        rotations: tuple[int, int, int | None] | Iterable[tuple[int, int, int | None]],
+        rotations: tuple[int, int] | Iterable[tuple[int, int]],
     ) -> dict[ResidueName, RotListStored]:
-        """
-        Add new rotating-element definitions for a residue.
+        """Record one or more turnable bonds for a residue.
 
         Parameters
         ----------
         residue_name : str
-            Residue to augment.
-        rotations : (int, int, int | None) or Iterable[tuple[int, int, int | None]]
-            Either a single triple `[start, bond, end_or_None]`, or an iterable
-            of such triples. Negative indices are allowed and normalized later.
+            Residue to add the bonds to.
+        rotations : tuple of int, or iterable of tuple of int
+            Either one ``(first_atom, second_atom)`` pair or an iterable of
+            them. Indices are counted from the start of the residue; negative
+            values count back from its end and are resolved when used.
 
         Returns
         -------
-        dict[str, RotListStored]
-            Updated :attr:`rotating_elements`.
+        dict
+            The updated :attr:`rotating_elements`, keyed by residue name.
 
         Raises
         ------
         ValueError
-            If any rotation is not a 3-tuple/list.
+            If any entry is not a pair of atom indices.
+
+        See Also
+        --------
+        torsions : Reads these back with negative indices resolved.
+
+        Examples
+        --------
+        >>> structure = Structure(["LIG"], residue_length=[6])
+        >>> structure.add_rotation("LIG", (1, 2))["LIG"]
+        [[1, 2]]
+        >>> structure.add_rotation("LIG", [(2, 3), (3, 4)])["LIG"]
+        [[1, 2], [2, 3], [3, 4]]
         """
-        # Ensure the entry exists and is a list (not the sentinel)
+        # The sentinel marks "no bonds recorded yet" and must give way to a
+        # real list before anything can be appended to it.
         if self.rotating_elements.get(residue_name) == [None]:
             self.rotating_elements[residue_name] = []
 
-        def is_triplet(x: object) -> bool:
-            return isinstance(x, list | tuple) and len(x) == 3
-
-        if is_triplet(rotations):
-            s, b, e = rotations  # type: ignore[index]
-            self.rotating_elements[residue_name].append(
-                [int(s), int(b), None if e is None else int(e)]
+        def is_pair(value: object) -> bool:
+            # Length alone is not enough: a list of exactly two bonds is also
+            # length 2, and would be mistaken for one bond of two atoms.
+            return (
+                isinstance(value, list | tuple)
+                and len(value) == 2
+                and not any(isinstance(item, list | tuple) for item in value)
             )
+
+        if is_pair(rotations):
+            first, second = rotations  # type: ignore[misc]
+            self.rotating_elements[residue_name].append([int(first), int(second)])
         elif isinstance(rotations, Iterable):
-            for rot in rotations:  # type: ignore[assignment]
-                if not is_triplet(rot):
+            for rotation in rotations:  # type: ignore[assignment]
+                if not is_pair(rotation):
                     raise ValueError(
-                        "Each rotation must be a [start, bond, end] triple."
+                        f"Each turnable bond needs two atom indices; got {rotation!r}"
                     )
-                s, b, e = rot  # type: ignore[misc]
-                self.rotating_elements[residue_name].append(
-                    [int(s), int(b), None if e is None else int(e)]
-                )
+                first, second = rotation  # type: ignore[misc]
+                self.rotating_elements[residue_name].append([int(first), int(second)])
         else:
             raise ValueError(
-                "rotations must be a triple or an iterable of triples "
-                "[start, bond, end]."
+                f"rotations must be an atom-index pair or an iterable of "
+                f"pairs; got {rotations!r}"
             )
 
         return self.rotating_elements
@@ -367,45 +384,55 @@ class Structure:
 
         return new_idx, old_idx, float(prepend_len)
 
-    def torsions(self, residue: ResidueName) -> list[tuple[int, int, int | None]]:
-        """
-        Return all rotation triples for a residue with indices normalized.
+    def torsions(self, residue: ResidueName) -> list[tuple[int, int]]:
+        """Return the turnable bonds of a residue, as counted-from-zero indices.
 
         Parameters
         ----------
         residue : str
-            Residue name to query.
+            Residue name to look up.
 
         Returns
         -------
-        list[tuple[int, int, int | None]]
-            Each tuple is ``(start, bond, end_or_None)`` with indices normalized
-            to absolute 0-based; if `end` was `None`, it remains `None`.
+        list of tuple of int
+            One ``(first_atom, second_atom)`` pair per bond, with any negative
+            index replaced by its position counted from the start of the
+            residue. Empty if the residue has no turnable bonds.
 
         Raises
         ------
         ValueError
-            If the residue is unknown or its length is not set.
+            If the residue is not in this Structure, or if its atom count was
+            never set and so negative indices cannot be resolved.
+
+        See Also
+        --------
+        add_rotation : Records the bonds this reads back.
+
+        Examples
+        --------
+        A residue of six atoms, with one bond given from the end.
+
+        >>> structure = Structure(
+        ...     ["LIG"], residue_length=[6], rotating_elements=[("LIG", -3, -2)]
+        ... )
+        >>> structure.torsions("LIG")
+        [(3, 4)]
         """
         if residue not in self.rotating_elements:
             raise ValueError(f"Unknown residue {residue!r}")
-        triples = self.rotating_elements[residue]
-        if triples == [None]:  # sentinel for "no rotations defined"
+        bonds = self.rotating_elements[residue]
+        if bonds == [None]:  # no turnable bonds recorded for this residue
             return []
 
         if residue not in self.residue_length or self.residue_length[residue] <= 0:
             raise ValueError(f"Length not set for residue {residue!r}")
-        L = self.residue_length[residue]
+        length = self.residue_length[residue]
 
-        def norm(x: int | None) -> int | None:
-            if x is None:
-                return None
-            return x + L if x < 0 else x
-
-        out: list[tuple[int, int, int | None]] = []
-        for t in triples:
-            s = int(t[0])
-            b = int(t[1])
-            e = t[2] if (t[2] is None) else int(t[2])
-            out.append((norm(s), norm(b), norm(e)))  # type: ignore[arg-type]
-        return out
+        return [
+            (
+                int(first) + length if first < 0 else int(first),
+                int(second) + length if second < 0 else int(second),
+            )
+            for first, second in bonds
+        ]
