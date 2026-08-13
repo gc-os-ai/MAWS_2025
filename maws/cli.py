@@ -240,6 +240,13 @@ def _add_design(subcommands: Any) -> None:
         default="protein",
         help="what the target is",
     )
+    shape.add_argument(
+        "--net-charge",
+        type=int,
+        default=0,
+        metavar="N",
+        help="the target's overall charge; only used for --molecule organic [0]",
+    )
 
     search = parser.add_argument_group("sampling")
     search.add_argument(
@@ -348,6 +355,13 @@ def _add_prepare(subcommands: Any) -> None:
     )
     parser.add_argument(
         "--aptamer", choices=("RNA", "DNA"), default="RNA", help="nucleic acid to use"
+    )
+    parser.add_argument(
+        "--net-charge",
+        type=int,
+        default=0,
+        metavar="N",
+        help="the target's overall charge, e.g. -2 [0]",
     )
     parser.add_argument(
         "-o", "--output", metavar="DIR", default="./params", help="where to write them"
@@ -600,6 +614,7 @@ def _run_design(args: argparse.Namespace) -> int:
             length=settings["length"],
             aptamer=settings["aptamer"],
             molecule=settings["molecule"],
+            net_charge=settings["net_charge"],
             samples=settings["samples"],
             first_samples=settings["first_samples"],
             beta=settings["beta"],
@@ -666,6 +681,7 @@ def _run_prepare(args: argparse.Namespace) -> int:
             path=target,
             residue_name=default_residue_name(target),
             parameterized=forcefield.parameterized,
+            net_charge=args.net_charge,
         ),
         forcefield,
     )

@@ -71,6 +71,7 @@ def make_lib(
     connect0: str | None = None,
     connect1: str | None = None,
     charges: str = "bcc",
+    net_charge: int = 0,
     atom_type: str = "gaff",
     force_field_aptamer: str = "leaprc.RNA.OL3",
     force_field_ligand: str = "leaprc.protein.ff19SB",
@@ -78,7 +79,7 @@ def make_lib(
     output_dir: str | Path | None = None,
 ) -> int:
     """make_lib(file_path, residue_name, connect0=None, connect1=None,
-                charges="bcc", atom_type="gaff",
+                charges="bcc", net_charge=0, atom_type="gaff",
                 force_field_aptamer="leaprc.RNA.OL3",
                 force_field_ligand="leaprc.protein.ff19SB",
                 parameterized=False, output_dir=None) -> int
@@ -116,6 +117,14 @@ def make_lib(
         charge. ``"bcc"`` is the usual choice: fast, and accurate enough for
         comparing shapes of the same molecule. Not used when `parameterized`
         is True, because then no charges are being worked out.
+    net_charge : int, default=0
+        The molecule's overall charge, in units of the electron charge: -2 for
+        a doubly deprotonated acid, +1 for a protonated amine, and so on.
+        ``antechamber`` shares the total out across the atoms, so the wrong
+        total puts the wrong charge on every atom of the molecule, and every
+        energy computed afterwards is wrong with it. Zero is right for a
+        neutral molecule and wrong for everything else. Not used when
+        `parameterized` is True.
     atom_type : str, default="gaff"
         Which family of chemical atom types ``antechamber`` assigns. This has
         to agree with `force_field_ligand`, so a `force_field_ligand`
@@ -186,13 +195,16 @@ def make_lib(
     >>> n_atoms  # doctest: +SKIP
     1462
 
-    A small organic molecule, whose parameters have to be worked out:
+    A small organic molecule, whose parameters have to be worked out. This one
+    carries two negative charges, which has to be said or every atom of it
+    comes out with the wrong charge:
 
     >>> make_lib(  # doctest: +SKIP
     ...     "ligand.mol2",
     ...     "LIG",
     ...     force_field_ligand="leaprc.gaff2",
     ...     atom_type="gaff2",
+    ...     net_charge=-2,
     ...     parameterized=False,
     ... )
     42
@@ -249,6 +261,8 @@ def make_lib(
                     residue_name,
                     "-at",
                     ante_at,
+                    "-nc",
+                    str(net_charge),
                 ],
                 cwd=w,
             )

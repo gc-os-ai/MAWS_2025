@@ -215,6 +215,13 @@ class PdbChain(_ChainSpecBase):
         Whether the target's force field already describes this molecule. When
         True, ``antechamber`` and ``parmchk2`` are skipped and the PDB file
         goes straight to ``tleap``.
+    net_charge : int, default=0
+        The molecule's overall charge, in units of the electron charge: -2 for
+        a doubly deprotonated acid, +1 for a protonated amine, and so on. Used
+        only when `parameterized` is False, where ``antechamber`` needs it to
+        work out the charges: it distributes the total across the atoms, so
+        the wrong total puts the wrong charge on every one of them. Zero is
+        right for a neutral molecule and wrong for everything else.
 
     See Also
     --------
@@ -225,6 +232,7 @@ class PdbChain(_ChainSpecBase):
     path: Path
     residue_name: str
     parameterized: bool
+    net_charge: int = 0
 
 
 ChainSpec = ResidueChain | PdbChain
@@ -463,6 +471,7 @@ class Assembly:
         *,
         role: str = "ligand",
         residue_name: str | None = None,
+        net_charge: int = 0,
     ) -> Assembly:
         """Return a copy of this assembly with a target chain added from a PDB.
 
@@ -484,6 +493,11 @@ class Assembly:
             Name ``tleap`` should know the molecule by. By default it is
             derived from the file's contents, so two different targets cannot
             end up writing to the same parameter file.
+        net_charge : int, default=0
+            The molecule's overall charge, in units of the electron charge.
+            Only used when its parameters have to be worked out, where it
+            decides how much charge is shared out across the atoms. Zero is
+            right for a neutral molecule and wrong for everything else.
 
         Returns
         -------
@@ -502,6 +516,7 @@ class Assembly:
                 path=resolved,
                 residue_name=residue_name or default_residue_name(resolved),
                 parameterized=forcefield.parameterized,
+                net_charge=net_charge,
             )
         )
 

@@ -647,6 +647,7 @@ class LeapBuilder:
             force_field_aptamer=forcefield.aptamer_source,
             force_field_ligand=forcefield.ligand_source,
             parameterized=chain.parameterized,
+            net_charge=chain.net_charge,
         )
         self._resources[chain.residue_name] = self._params_dir
         return ResidueChain(

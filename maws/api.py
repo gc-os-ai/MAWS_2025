@@ -165,6 +165,7 @@ def design(
     length: int = 15,
     aptamer: AptamerType = "RNA",
     molecule: MoleculeType = "protein",
+    net_charge: int = 0,
     samples: int = 5000,
     first_samples: int | None = None,
     beta: float = 0.01,
@@ -212,6 +213,14 @@ def design(
         and lipids have ready-made parameters; an organic molecule does not, so
         its own are worked out at the start of the run, which takes extra
         minutes.
+    net_charge : int, default=0
+        The target's overall charge, in units of the electron charge: -2 for a
+        doubly deprotonated acid, +1 for a protonated amine, and so on. Only
+        used when `molecule` is ``"organic"``, where the parameters are worked
+        out at the start of the run: the total is shared out across the atoms,
+        so the wrong total puts the wrong charge on every one of them and
+        every energy computed afterwards is wrong with it. Zero is right for a
+        neutral molecule and wrong for everything else.
     samples : int, default=5000
         How many shapes to try per candidate at each growth step. This is the
         main cost: the total work is roughly ``8 * samples * length`` energy
@@ -352,7 +361,11 @@ def design(
 
     forcefield = ForceField.for_target(aptamer, molecule, salt_conc=salt_conc)
     library = rna() if aptamer == "RNA" else dna()
-    assembly = Assembly().with_aptamer(library).with_ligand(path, forcefield)
+    assembly = (
+        Assembly()
+        .with_aptamer(library)
+        .with_ligand(path, forcefield, net_charge=net_charge)
+    )
 
     used_builder = builder if builder is not None else LeapBuilder()
     base = used_builder.build(assembly, forcefield)
