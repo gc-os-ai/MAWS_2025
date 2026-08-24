@@ -1,12 +1,12 @@
-# Routines API Reference
+# Scoring API Reference
 
-`maws.routines` provides the scoring function that drives nucleotide selection in the MAWS aptamer-design loop.
+`maws.scoring` provides the scoring function that drives nucleotide selection in the MAWS aptamer-design loop.
 
 ## Overview
 
-Each step of the MAWS search samples many conformations of a candidate aptamer against the ligand and records their potential energies. `maws.routines` turns that energy sample into a single number. The one public entry point is [`entropy_score`](#entropy_score); MAWS keeps the candidate whose score is **lowest**.
+Each step of the MAWS search samples many conformations of a candidate aptamer against the ligand and records their potential energies. `maws.scoring` turns that energy sample into a single number. The one public entry point is [`entropy_score`](#entropy_score); MAWS keeps the candidate whose score is **lowest**.
 
-### How `routines` connects to the rest of MAWS
+### How `scoring` connects to the rest of MAWS
 
 `entropy_score` is the single seam between this module and everything else. Both the CLI script (`maws.maws2023.main`) and the programmatic API class (`maws.run.MawsRunner.run`) call it once per candidate nucleotide, per search step, on the list of energies gathered in that step's sampling loop.
 
@@ -56,7 +56,7 @@ Two consequences worth knowing:
 ### Usage
 
 ```python
-from maws.routines import entropy_score
+from maws.scoring import entropy_score
 
 energies = [-1500.0, -1490.0, -1450.0, -1200.0]
 score = entropy_score(energies, beta=0.01)

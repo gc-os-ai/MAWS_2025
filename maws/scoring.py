@@ -1,6 +1,6 @@
 """
-maws.routines
-=============
+maws.scoring
+============
 
 Thermodynamic scoring function for the MAWS aptamer selection algorithm.
 
@@ -16,7 +16,7 @@ precision.
 
 Examples
 --------
->>> from maws.routines import entropy_score
+>>> from maws.scoring import entropy_score
 >>> round(entropy_score([100.0, 150.0, 200.0, 175.0], beta=0.01), 6)
 -0.072433
 """

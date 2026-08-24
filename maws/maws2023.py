@@ -18,7 +18,7 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
-from maws.routines import entropy_score
+from maws.scoring import entropy_score
 
 # VERSION = "2.1" # Original Authoras To-do: cite in readme
 # RELEASE_DATE = "2017" # Original Authors To-do: cite in readme

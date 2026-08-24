@@ -15,7 +15,7 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
-from maws.routines import entropy_score
+from maws.scoring import entropy_score
 
 AptamerType = Literal["RNA", "DNA"]
 MoleculeType = Literal["protein", "organic", "lipid"]
