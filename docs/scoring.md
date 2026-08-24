@@ -48,7 +48,11 @@ which is the negative Kullback–Leibler divergence of that distribution from th
 
 ### Interpreting the score
 
-The score is at most `0`. It reaches `0` when every sampled energy is equal, and falls toward `-log(N)` as the distribution concentrates on a few conformations. So a **more negative score means a more peaked distribution**. EFBA takes that peakedness as evidence of stronger, more specific binding: a uniform distribution says nothing about where the strand prefers to sit. Hence selection by minimum.
+Read the probabilities as a preference. Weighting each conformation by `exp(-beta * E)` makes low-energy conformations likely and high-energy ones unlikely, and the weights across all `N` conformations add up to 1. Spread evenly, the strand favours no particular way of sitting against the ligand. Piled onto a few conformations, it favours those few.
+
+The score reports how far the weights sit from evenly spread. Evenly spread scores `0`, the maximum. The more the weight piles onto a few conformations, the further below `0` the score falls, down to a floor of `-log(N)`.
+
+EFBA takes a strong preference as its evidence of a good binder, on the reasoning that a strand which fits the ligand settles into a small number of conformations. That is why MAWS selects by minimum.
 
 Two consequences worth knowing:
 

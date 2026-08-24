@@ -18,16 +18,25 @@ The score implements the Entropic Fragment-Based Approach of Tseng et
 al. [1]_, the method MAWS was built on [2]_. The formula here is the one
 those authors published.
 
-A nucleotide worth keeping is one whose shapes concentrate into a narrow
-family. A nucleotide worth dropping spreads over everything the sampler
-tried. The score measures that concentration as the distance of the
-Boltzmann distribution over the sampled energies from a uniform
-distribution. A uniform distribution says nothing about where the strand
-prefers to sit, and scores 0. A sharply peaked one scores far below 0.
+Sampling one candidate produces a list of energies, one for each shape
+tried. The first step turns those energies into probabilities, weighting
+each shape by :math:`e^{-\beta E}`. A low-energy shape comes out likely, a
+high-energy one unlikely, and the probabilities across all the shapes add
+up to 1.
 
-Read the two warnings under :func:`entropy_score` before you interpret a
-score. One covers what the score ignores. The other covers what happens to
-a sample holding steric clashes.
+Read those probabilities as a preference. Spread evenly over every shape,
+the strand favours no particular way of sitting against the target. Piled
+onto a few shapes, it favours those few. EFBA takes a strong preference as
+its evidence of a good binder, on the reasoning that a strand which fits
+the target settles into a small number of shapes.
+
+The score reports how far the probabilities sit from evenly spread. Evenly
+spread scores 0. The further the weight piles onto a few shapes, the
+further below 0 the score falls, down to a floor of ``-log N`` for *N*
+shapes. MAWS keeps the candidate scoring lowest.
+
+Two things the score does not do are easy to assume it does. Read both
+warnings under :func:`entropy_score` before you interpret one.
 
 References
 ----------
