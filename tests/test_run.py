@@ -50,6 +50,86 @@ def test_maws_runner_smoke(tmp_path: Path) -> None:
     assert Path(result.pdb_path).stat().st_size > 0
 
 
+class TestSelectBeam:
+    """Tests for select_beam, which decides what survives a search step.
+
+    The beam is what makes a wrong early choice recoverable. Keeping one
+    candidate is the greedy search EFBA specifies; keeping more is the
+    departure described in `MawsRunner`.
+    """
+
+    @staticmethod
+    def _candidate(entropy, sequence):
+        from maws.run import Candidate
+
+        return Candidate(entropy=entropy, energy=0.0, sequence=sequence, positions=[])
+
+    def test_the_lowest_scoring_candidate_comes_first(self) -> None:
+        """Candidates are ordered by score, lowest first."""
+        from maws.run import select_beam
+
+        beam = select_beam(
+            [
+                self._candidate(-0.2, "A"),
+                self._candidate(-0.9, "G"),
+                self._candidate(-0.5, "C"),
+            ],
+            width=3,
+        )
+        assert [c.sequence for c in beam] == ["G", "C", "A"]
+
+    def test_a_width_of_one_keeps_only_the_winner(self) -> None:
+        """Width 1 is the greedy search EFBA specifies."""
+        from maws.run import select_beam
+
+        beam = select_beam(
+            [self._candidate(-0.2, "A"), self._candidate(-0.9, "G")], width=1
+        )
+        assert [c.sequence for c in beam] == ["G"]
+
+    def test_a_width_wider_than_the_field_keeps_everything(self) -> None:
+        """Asking for more candidates than exist returns the ones that do."""
+        from maws.run import select_beam
+
+        beam = select_beam([self._candidate(-0.2, "A")], width=5)
+        assert len(beam) == 1
+
+    def test_tied_scores_do_not_compare_the_rest_of_the_candidate(self) -> None:
+        """A tie is broken without touching `positions`.
+
+        Positions are arrays. Ordering two candidates by comparing whole
+        records would reach them on a tie, and comparing arrays raises
+        rather than returning an order.
+        """
+        import numpy as np
+
+        from maws.run import Candidate, select_beam
+
+        tied = [
+            Candidate(-0.5, 0.0, "G", np.zeros((3, 3))),
+            Candidate(-0.5, 0.0, "A", np.ones((3, 3))),
+        ]
+        assert len(select_beam(tied, width=2)) == 2
+
+
+def test_runner_defaults_to_the_greedy_search_efba_specifies() -> None:
+    """`beam` defaults to 1, so a default run follows the published method."""
+    runner = MawsRunner(num_nucleotides=1, aptamer_type="RNA", molecule_type="protein")
+    assert runner.beam == 1
+
+
+@pytest.mark.parametrize("beam", [0, -1])
+def test_runner_rejects_a_beam_narrower_than_one(beam: int) -> None:
+    """A search has to carry at least one candidate between steps."""
+    with pytest.raises(ValueError, match="beam must be >= 1"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            beam=beam,
+        )
+
+
 def test_runner_rejects_negative_reach() -> None:
     """MawsRunner raises ValueError on negative reach (no integration setup needed)."""
     with pytest.raises(ValueError, match="reach must be >= 0"):
