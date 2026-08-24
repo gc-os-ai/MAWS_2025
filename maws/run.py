@@ -33,9 +33,19 @@ class MawsResult:
     sequence : str
         Best aptamer sequence found.
     energy : float
-        Energy of the final best configuration.
+        Lowest total potential energy of the whole complex over the poses
+        sampled for the winning candidate, in kJ/mol.
+
+        .. warning::
+            This is not a binding energy and nothing in the search branches
+            on it. There is no unbound reference subtracted, so it is
+            dominated by the target's own internal energy, and candidates
+            with different atom counts do not produce comparable values.
+            Selection is decided entirely by `entropy`. See issue #49 (C4).
     entropy : float
-        Entropy score used for selection.
+        Score the selection was actually made on, from
+        :func:`maws.scoring.entropy_score`. At most 0, and the candidate
+        scoring lowest is the one kept.
     pdb_path : str
         Path to the saved result PDB file produced by the run.
     seed : int

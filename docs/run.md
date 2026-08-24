@@ -33,7 +33,7 @@ runner = MawsRunner(
 | `num_nucleotides` | `int` | *required* | Number of nucleotides to design |
 | `aptamer_type` | `"RNA"` or `"DNA"` | *required* | Aptamer type |
 | `molecule_type` | `"protein"`, `"organic"`, `"lipid"` | *required* | Ligand type |
-| `beta` | `float` | `0.01` | Inverse temperature for the entropy score (see [docs/scoring.md](scoring.md)) |
+| `beta` | `float` | `0.01` | How sharply lower energies are favoured in the entropy score, in mol/kJ. A Lagrange multiplier from the source method, not a temperature (see [docs/scoring.md](scoring.md)) |
 | `first_chunk_size` | `int` | `5000` | Samples in first step |
 | `second_chunk_size` | `int` | `5000` | Samples in subsequent steps |
 | `clean_pdb` | `bool` | `False` | Clean input PDB |
@@ -110,7 +110,7 @@ Frozen dataclass returned by `MawsRunner.run`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `sequence` | `str` | Best aptamer sequence found |
-| `energy` | `float` | Energy of the final best configuration; `nan` if no candidate was scored |
+| `energy` | `float` | Lowest total potential energy of the whole complex over the sampled poses; `nan` if no candidate was scored. **Not a binding energy** — no unbound reference, dominated by the target's own internal energy, not comparable between candidates, and never used to select anything (issue #49, C4) |
 | `entropy` | `float` | Entropy score used for selection (`maws.scoring.entropy_score`; ≤ 0, lower is better) |
 | `pdb_path` | `str \| None` | Path to the written PDB, or `None` when `output_pdb` was not given |
 | `seed` | `int \| None` | The seed the run used. Pass it back as `MawsRunner(seed=...)` to reproduce this result |

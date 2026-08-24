@@ -71,7 +71,16 @@ def parse_args():
         help="Type of ligand molecule.",
     )
     parser.add_argument(
-        "-b", "--beta", type=float, default=0.01, help="Inverse temperature."
+        "-b",
+        "--beta",
+        type=float,
+        default=0.01,
+        help=(
+            "How sharply lower energies are favoured in the entropy score "
+            "(mol/kJ). Default: 0.01, the value used by the method MAWS "
+            "implements, where it is a Lagrange multiplier rather than a "
+            "physical inverse temperature."
+        ),
     )
     parser.add_argument(
         "-c1",
