@@ -2,33 +2,32 @@ r"""
 maws.scoring
 ============
 
-The criterion MAWS ranks candidate nucleotides by.
+Score candidate nucleotides so a MAWS run can choose between them.
 
-A MAWS run grows an aptamer - a short strand of DNA or RNA meant to stick to
-a chosen target molecule - one nucleotide at a time. At each step it tries
-every nucleotide it could add, samples many shapes of each candidate strand
-against the target, and records the potential energy of every shape. This
-module turns one such list of energies into the single number the step is
-decided on. The candidate scoring **lowest** is the one kept.
+A MAWS run grows an aptamer one nucleotide at a time. An aptamer is a short
+strand of DNA or RNA meant to stick to a chosen target molecule. At each step
+the run tries every nucleotide it could add. It samples many shapes of each
+candidate strand against the target and records the potential energy of every
+shape. This module turns one such list of energies into the single number the
+step is decided on. The candidate scoring **lowest** is the one kept.
 
 Where the criterion comes from
 ------------------------------
 
-The score is not an invention of this package. It implements the Entropic
-Fragment-Based Approach of Tseng et al. [1]_, which MAWS was built on [2]_,
-and the formula here is the one those authors published.
+The score implements the Entropic Fragment-Based Approach of Tseng et
+al. [1]_, the method MAWS was built on [2]_. The formula here is the one
+those authors published.
 
-The idea is that a nucleotide worth keeping is one whose shapes concentrate
-into a narrow family rather than spreading over everything the sampler tried.
-Concentration is measured as the distance of the Boltzmann distribution over
-the sampled energies from a uniform distribution. A distribution that is
-already uniform carries no information about where the strand prefers to sit,
-and scores 0; a sharply peaked one scores far below 0.
+A nucleotide worth keeping is one whose shapes concentrate into a narrow
+family. A nucleotide worth dropping spreads over everything the sampler
+tried. The score measures that concentration as the distance of the
+Boltzmann distribution over the sampled energies from a uniform
+distribution. A uniform distribution says nothing about where the strand
+prefers to sit, and scores 0. A sharply peaked one scores far below 0.
 
-Two properties of that choice are worth knowing before reading a score, and
-both are described under :func:`entropy_score`: the score is unchanged by
-shifting every energy by a constant, and a shape whose Boltzmann weight
-underflows to zero leaves the sample entirely.
+Read the two warnings under :func:`entropy_score` before you interpret a
+score. One covers what the score ignores. The other covers what happens to
+a sample holding steric clashes.
 
 References
 ----------
@@ -55,7 +54,7 @@ def _boltzmann(sample, beta):
     r"""
     Compute normalised Boltzmann probabilities from energy samples.
 
-    Internal helper - use :func:`entropy_score` as the public API.
+    Internal helper. :func:`entropy_score` is the public API.
 
     Parameters
     ----------
@@ -83,17 +82,17 @@ def entropy_score(sample, beta=0.01):
 
     Return how concentrated a candidate's sampled energies are.
 
-    Turns the energies into a Boltzmann distribution and returns that
-    distribution's distance from uniform, negated. The result is at most 0,
-    reaching 0 when every sampled energy is equal, and falling towards
+    The energies become a Boltzmann distribution. The result is that
+    distribution's distance from uniform, negated. It is at most 0. It
+    reaches 0 when every sampled energy is equal, and falls towards
     ``-log N`` as the weight gathers onto a single shape. MAWS keeps the
     candidate scoring lowest.
 
     Parameters
     ----------
     sample : array-like
-        Energy values in kJ/mol, one per sampled shape of one candidate
-        strand. At least one is required.
+        The energy of each sampled shape of one candidate strand, in kJ/mol.
+        At least one is required.
     beta : float, default=0.01
         How sharply lower energies are favoured, in mol/kJ. Raising it makes
         the score depend mostly on the few lowest-energy shapes; at 0 every
@@ -136,26 +135,28 @@ def entropy_score(sample, beta=0.01):
 
     .. note::
         `beta` enters the source method as a Lagrange multiplier of the
-        maximum-entropy derivation, not as a physical inverse temperature.
-        The default of 0.01 is the value used there, where the ranking it
-        produced held across every multiplier tried. Read as :math:`1/RT` it
-        would correspond to about 12,000 K, which is why it does not match
-        the 0.401 mol/kJ of a 300 K calculation.
+        maximum-entropy derivation. The default of 0.01 is the value those
+        authors used, and they report their nucleotide ranking held across
+        every multiplier they tried. Read instead as :math:`1/RT`, 0.01
+        corresponds to about 12,000 K. That is why it differs from the
+        0.401 mol/kJ of a 300 K calculation.
 
     .. warning::
-        The score reads the spread of `sample`, never the absolute energies.
-        Adding the same constant to every energy leaves it unchanged, so a
-        candidate whose shapes all sit at -5000 kJ/mol and one whose shapes
-        all sit at +5000 kJ/mol score identically. It measures how tightly a
-        candidate settles, not how strongly it binds.
+        The score reads only the spread of `sample`. Adding the same
+        constant to every energy leaves it unchanged. A candidate whose
+        shapes all sit at -5000 kJ/mol and one whose shapes all sit at
+        +5000 kJ/mol therefore score identically. The score measures how
+        tightly a candidate settles. Binding strength needs a separate
+        term.
 
     .. warning::
-        A shape at around 1e8 kJ/mol, which is what atoms placed on top of
-        each other cost, has a Boltzmann weight of exactly 0 in double
-        precision. It drops out of the sum, so a sample holding such shapes
-        scores as though it had been sampled fewer times, which lowers the
-        score. Keep them out of `sample` rather than relying on the weighting
-        to discount them.
+        Atoms placed on top of each other cost around 1e8 kJ/mol. In double
+        precision that shape's Boltzmann weight is exactly 0, so it leaves
+        the distribution. A sample holding such shapes then scores as though
+        it had been sampled fewer times, which lowers the score. Since MAWS
+        keeps the lowest score, clashes make a candidate look better. Keep
+        them out of `sample`. The weighting will not discount them for
+        you.
 
     Examples
     --------

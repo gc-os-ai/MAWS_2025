@@ -711,7 +711,7 @@ class SurfaceSampler:
        the candidate's ``position`` against every protein atom's
        ``vdW + probe`` sphere. If the candidate would put an aptamer atom
        too close to any protein atom (steric clash by the SAS rule), it
-       is rejected and we draw again. Cost: O(log N_atoms) per check
+       is rejected and the sampler draws again. Cost: O(log N_atoms) per check
        (~50 µs for a ~3000-atom protein, dominated by the KDTree query).
 
     The loop continues until a candidate passes both filters or
@@ -762,7 +762,7 @@ class SurfaceFollowingSampler:
 
     i.e. a layer of thickness ``d_max`` wrapping the protein's atomic
     surface (including following into pockets, since "near any atom" is
-    direction-agnostic), capped on the outside so we don't sample far
+    direction-agnostic), capped on the outside to keep the sampler out of far
     solvent.
 
     Algorithm (per call to :meth:`generator`)
