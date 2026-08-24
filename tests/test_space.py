@@ -492,6 +492,194 @@ class TestDrawClearConformation:
             )
 
 
+class _StubGrowComplex:
+    """Shifts atom 0 one A along x every time the strand is bent."""
+
+    def __init__(self):
+        import openmm as mm
+        from openmm import unit as ommunit
+
+        self._mm, self._unit = mm, ommunit
+        self.positions = [mm.Vec3(0.0, 0.0, 0.0)] * 3 * ommunit.angstrom
+
+    def bend(self):
+        moved = self.positions[:]
+        moved[0] += self._mm.Vec3(1.0, 0.0, 0.0) * self._unit.angstrom
+        self.positions = moved
+
+
+class _StubGrowChain:
+    """Records every bend as ``(residue, torsion, angle, reverse)``."""
+
+    def __init__(self, complex_obj=None):
+        self.complex_obj = complex_obj
+        self.calls = []
+
+    def rotate_in_residue(self, residue, torsion, angle, reverse=False):
+        self.calls.append((residue, torsion, angle, reverse))
+        if self.complex_obj is not None:
+            self.complex_obj.bend()
+
+
+class _StubTorsions:
+    """Hands back four distinguishable angles, and counts the draws."""
+
+    def __init__(self):
+        self.draws = 0
+
+    def generator(self):
+        self.draws += 1
+        return np.array([0.1, 0.2, 0.3, 0.4])
+
+
+class TestNewResidueElement:
+    """The atom range of the residue a growth step just added.
+
+    The chain here starts at atom 10 and holds three residues of 5, 7 and 6
+    atoms, so its atoms run from 10 to 27.
+    """
+
+    class _Chain:
+        start = 10
+        length = 18
+        residues_start = [0, 5, 12]
+
+    def test_appending_names_the_last_residue(self):
+        """Appending puts the new residue at the 3' end, atoms 22 to 27."""
+        from maws.space import new_residue_element
+
+        assert new_residue_element(self._Chain(), append=True) == [22, 23, 28]
+
+    def test_prepending_names_the_first_residue(self):
+        """Prepending puts the new residue at the 5' end, atoms 10 to 14."""
+        from maws.space import new_residue_element
+
+        assert new_residue_element(self._Chain(), append=False) == [10, 11, 15]
+
+
+class TestDrawClearTorsions:
+    """Tests for draw_clear_torsions, the reject-and-redraw loop of a growth step.
+
+    A growth step keeps the strand where the step before it left off and
+    varies only the torsions of the nucleotide it just added. Those torsions
+    swing that nucleotide several angstrom, far enough to drive it into the
+    target, so each draw has to be checked before it is scored.
+
+    See issues #48 and #49.
+    """
+
+    def test_a_clear_draw_is_accepted_on_the_first_try(self):
+        """Nothing is redrawn when the first set of torsions already clears."""
+        from maws.space import draw_clear_torsions
+
+        torsions = _StubTorsions()
+        draw_clear_torsions(
+            _StubGrowComplex(),
+            _StubGrowChain(),
+            torsions,
+            _StubClash(0),
+            append=True,
+        )
+        assert torsions.draws == 1
+
+    def test_a_rejected_draw_is_bent_again(self):
+        """Each rejection costs one more set of torsions.
+
+        A rejected draw must not be scored, or the clash it holds enters the
+        energy sample and the candidate is ranked on it.
+        """
+        from maws.space import draw_clear_torsions
+
+        torsions, chain = _StubTorsions(), _StubGrowChain()
+        draw_clear_torsions(
+            _StubGrowComplex(), chain, torsions, _StubClash(3), append=True
+        )
+        assert torsions.draws == 4
+        assert len(chain.calls) == 4 * 4
+
+    def test_the_strand_is_reset_before_each_attempt(self):
+        """Every attempt bends the strand the step before it left, not the last draw.
+
+        Without the reset each attempt would build on the rejected one before
+        it, so an accepted draw would be a composition of failures rather than
+        the single set of torsions that was checked.
+        """
+        from maws.helpers import nostrom
+        from maws.space import draw_clear_torsions
+
+        cx = _StubGrowComplex()
+        chain = _StubGrowChain(cx)
+        seen = []
+
+        class _RecordingClash:
+            def __init__(self, rejections):
+                self.rejections = rejections
+
+            def is_clear(self, positions):
+                seen.append(float(np.asarray(positions)[0][0]))
+                if self.rejections:
+                    self.rejections -= 1
+                    return False
+                return True
+
+        draw_clear_torsions(cx, chain, _StubTorsions(), _RecordingClash(3), append=True)
+        assert seen == [4.0, 4.0, 4.0, 4.0]
+        assert float(np.asarray(nostrom(cx.positions))[0][0]) == 4.0
+
+    def test_appending_bends_the_new_last_residue(self):
+        """Three torsions inside the new 3' residue, then the bond that carries it.
+
+        The fourth turn is about C3'-O3' of the residue before, which swings
+        the whole new residue rather than reshaping it.
+        """
+        from maws.space import draw_clear_torsions
+
+        chain = _StubGrowChain()
+        draw_clear_torsions(
+            _StubGrowComplex(), chain, _StubTorsions(), _StubClash(0), append=True
+        )
+        assert chain.calls == [
+            (-1, 0, 0.1, False),
+            (-1, 1, 0.2, False),
+            (-1, 2, 0.3, False),
+            (-2, 3, 0.4, False),
+        ]
+
+    def test_prepending_bends_the_new_first_residue_the_other_way(self):
+        """A 5' residue turns the part of the strand joined to the bond's first atom.
+
+        Growing at the 5' end puts the new residue before everything already
+        placed, so a turn has to move the new residue and leave the rest of
+        the strand where it is.
+        """
+        from maws.space import draw_clear_torsions
+
+        chain = _StubGrowChain()
+        draw_clear_torsions(
+            _StubGrowComplex(), chain, _StubTorsions(), _StubClash(0), append=False
+        )
+        assert chain.calls == [
+            (0, 0, 0.1, True),
+            (0, 1, 0.2, True),
+            (0, 2, 0.3, True),
+            (0, 3, 0.4, True),
+        ]
+
+    def test_giving_up_raises(self):
+        """A strand nothing can bend clear fails loudly instead of looping forever."""
+        from maws.space import SamplingError, draw_clear_torsions
+
+        with pytest.raises(SamplingError, match="attempts"):
+            draw_clear_torsions(
+                _StubGrowComplex(),
+                _StubGrowChain(),
+                _StubTorsions(),
+                _StubClash(999),
+                append=True,
+                max_rejections=5,
+            )
+
+
 class TestModeAndSiteCompose:
     """The region's shape and where it is aimed are independent settings.
 

@@ -103,6 +103,30 @@ class TestComplexBuildIntegration:
         )
 
     @pytest.mark.skipif(not HAS_AMBERTOOLS, reason="AmberTools (tleap) not available")
+    def test_new_residue_element_names_the_residue_a_growth_step_added(
+        self, rna_structure, tmp_path
+    ):
+        """The atom range of a grown nucleotide matches the residue it built.
+
+        A growth step bends only the nucleotide it just added, so that is the
+        range the clash filter has to treat as moving. The range is read off
+        the strand's own residue offsets, which this pins against a strand
+        tleap actually built rather than a stand-in.
+        """
+        from maws.space import new_residue_element
+
+        cpx = Complex()
+        cpx.add_chain("G A", rna_structure)
+
+        if not safe_build(cpx, tmp_path):
+            return  # Skip already handled
+
+        chain = cpx.chains[0]
+        # G5 is 32 atoms and A3 is 34, so the strand runs from 0 to 65.
+        assert new_residue_element(chain, append=True) == [32, 33, 66]
+        assert new_residue_element(chain, append=False) == [0, 1, 32]
+
+    @pytest.mark.skipif(not HAS_AMBERTOOLS, reason="AmberTools (tleap) not available")
     def test_build_caches_results(self, rna_structure, tmp_path):
         """Complex.build() uses cache for repeated builds."""
         # First build

@@ -557,6 +557,142 @@ def draw_clear_conformation(
     )
 
 
+def new_residue_element(chain, *, append: bool) -> list[int]:
+    """Return the atom range of the residue a growth step has just added.
+
+    A growth step adds one nucleotide to a strand, at the 3' end when
+    `append` is true and at the 5' end when it is false. The torsions that
+    follow move that nucleotide and nothing else, so it is the range a
+    :class:`ClashFilter` should treat as moving.
+
+    Parameters
+    ----------
+    chain : maws.chain.Chain
+        The strand the nucleotide was added to, holding two residues or more.
+    append : bool
+        True when the nucleotide went on the 3' end, false for the 5' end.
+
+    Returns
+    -------
+    list of int
+        ``[start, bond, end]`` atom indices counted across the whole Complex,
+        with `end` exclusive, in the form :class:`ClashFilter` takes.
+
+    See Also
+    --------
+    ClashFilter : Reads this to decide which atoms move.
+    draw_clear_torsions : Bends the residue this names.
+
+    Examples
+    --------
+    A strand starting at atom 10 with residues of 5, 7 and 6 atoms.
+
+    >>> from types import SimpleNamespace
+    >>> chain = SimpleNamespace(start=10, length=18, residues_start=[0, 5, 12])
+    >>> new_residue_element(chain, append=True)
+    [22, 23, 28]
+    >>> new_residue_element(chain, append=False)
+    [10, 11, 15]
+    """
+    if append:
+        first = chain.start + chain.residues_start[-1]
+        return [first, first + 1, chain.start + chain.length]
+    return [chain.start, chain.start + 1, chain.start + chain.residues_start[1]]
+
+
+def draw_clear_torsions(
+    complex_obj,
+    chain,
+    rotations,
+    clash: ClashFilter,
+    *,
+    append: bool,
+    max_rejections: int = 1000,
+) -> np.ndarray:
+    """draw_clear_torsions(complex_obj, chain, rotations, clash, *, append,
+    max_rejections=1000)
+
+    Bend the nucleotide a growth step has just added until it sits clear.
+
+    One attempt draws a torsion angle for each rotatable backbone bond of the
+    new nucleotide, applies them, and asks `clash` whether the result touches
+    the target. A rejected attempt is neither scored nor counted, and the
+    strand is returned to where it started before the next one, so only a
+    single draw is accepted.
+
+    The strand stays where the step before left it. Only the torsions vary,
+    and they swing the new nucleotide several angstrom, far enough to drive it
+    into the target or back into the strand it was added to.
+
+    Parameters
+    ----------
+    complex_obj : maws.complex.Complex
+        Holds both the strand and the target. Left holding the accepted
+        conformation.
+    chain : maws.chain.Chain
+        The strand the nucleotide was added to.
+    rotations : NAngles
+        Draws one torsion angle per rotatable backbone bond, in radians. The
+        last angle drawn turns the bond that carries the new nucleotide; the
+        rest reshape it.
+    clash : ClashFilter
+        Built for the same `complex_obj` and the range
+        :func:`new_residue_element` gives for this `append`.
+    append : bool
+        True when the nucleotide went on the 3' end, false for the 5' end.
+    max_rejections : int, default=1000
+        Hard cap on consecutive rejected attempts before giving up.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(n,)`` accepted torsion angles in radians. `complex_obj`
+        already holds the conformation they produce.
+
+    Raises
+    ------
+    SamplingError
+        If nothing clears the target within `max_rejections` attempts.
+
+    See Also
+    --------
+    draw_clear_conformation : The same loop for a strand that is also placed.
+    new_residue_element : Names the atoms this moves.
+
+    Examples
+    --------
+    >>> clash = ClashFilter(  # doctest: +SKIP
+    ...     complex, new_residue_element(chain, append=True)
+    ... )
+    >>> angles = draw_clear_torsions(  # doctest: +SKIP
+    ...     complex, chain, NAngles(4), clash, append=True
+    ... )
+    """
+    start = complex_obj.positions[:]
+    residue = -1 if append else 0
+    for _ in range(max_rejections):
+        complex_obj.positions = start[:]
+
+        angles = rotations.generator()
+        for torsion, angle in enumerate(angles[:-1]):
+            chain.rotate_in_residue(residue, torsion, angle, reverse=not append)
+        # The last bond belongs to the residue before the new one when growing
+        # at the 3' end, and to the new residue itself when growing at the 5'.
+        chain.rotate_in_residue(
+            -2 if append else 0, len(angles) - 1, angles[-1], reverse=not append
+        )
+
+        if clash.is_clear(nostrom(complex_obj.positions)):
+            return angles
+
+    complex_obj.positions = start[:]
+    raise SamplingError(
+        f"Could not bend the new nucleotide clear of the target in "
+        f"{max_rejections} attempts. The strand may have grown into the "
+        f"target - raise the clash tolerance."
+    )
+
+
 @dataclass
 class SurfaceSampler:
     """

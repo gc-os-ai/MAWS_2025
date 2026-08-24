@@ -451,24 +451,16 @@ def main():
                     )
 
                     positions0 = cx.positions[:]
+                    clash = space.ClashFilter(
+                        cx,
+                        space.new_residue_element(aptamer, append=append),
+                        tolerance=args.clash_tolerance,
+                    )
 
                     for _ in range(SECOND_CHUNK_SIZE):
-                        rotation = rotations.generator()
-
-                        # Forward rotations on the new residue’s internal bonds
-                        for j in range(N_ELEMENTS - 1):
-                            if append:
-                                aptamer.rotate_in_residue(-1, j, rotation[j])
-                            else:
-                                aptamer.rotate_in_residue(
-                                    0, j, rotation[j], reverse=True
-                                )
-
-                        # Backward rotation (C3'-O3')
-                        if append:
-                            aptamer.rotate_in_residue(-2, 3, rotation[3])
-                        else:
-                            aptamer.rotate_in_residue(0, 3, rotation[3], reverse=True)
+                        space.draw_clear_torsions(
+                            cx, aptamer, rotations, clash, append=append
+                        )
 
                         energy = cx.get_energy()[0]
                         if free_E is None or energy < free_E:
