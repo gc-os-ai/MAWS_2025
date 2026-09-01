@@ -59,10 +59,31 @@ class TestSelectBeam:
     """
 
     @staticmethod
-    def _candidate(entropy, sequence):
+    def _candidate(entropy, sequence, total=None):
         from maws.run import Candidate
 
-        return Candidate(entropy=entropy, energy=0.0, sequence=sequence, positions=[])
+        return Candidate(
+            entropy=entropy,
+            total=entropy if total is None else total,
+            energy=0.0,
+            sequence=sequence,
+            positions=[],
+        )
+
+    def test_candidates_are_ranked_by_the_running_total(self) -> None:
+        """A lucky step does not let a weak lineage displace a strong one.
+
+        EFBA's entropy is extensive, so an aptamer's score is the sum over
+        every nucleotide in it. Beam members carry different histories, so
+        ranking their children on the current step alone would weigh a
+        strong lineage against a weak one as though they were equal.
+        """
+        from maws.run import select_beam
+
+        lucky_step = self._candidate(-0.9, "AA", total=-1.0)
+        strong_line = self._candidate(-0.2, "GG", total=-2.0)
+        beam = select_beam([lucky_step, strong_line], width=1)
+        assert [c.sequence for c in beam] == ["GG"]
 
     def test_the_lowest_scoring_candidate_comes_first(self) -> None:
         """Candidates are ordered by score, lowest first."""
@@ -106,8 +127,8 @@ class TestSelectBeam:
         from maws.run import Candidate, select_beam
 
         tied = [
-            Candidate(-0.5, 0.0, "G", np.zeros((3, 3))),
-            Candidate(-0.5, 0.0, "A", np.ones((3, 3))),
+            Candidate(-0.5, -0.5, 0.0, "G", np.zeros((3, 3))),
+            Candidate(-0.5, -0.5, 0.0, "A", np.ones((3, 3))),
         ]
         assert len(select_beam(tied, width=2)) == 2
 

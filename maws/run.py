@@ -30,7 +30,12 @@ class Candidate(NamedTuple):
     Parameters
     ----------
     entropy : float
-        Score from :func:`maws.scoring.entropy_score`. Lower is better.
+        Score from :func:`maws.scoring.entropy_score` for the step that
+        added this nucleotide. Lower is better.
+    total : float
+        Sum of `entropy` over every step so far, including this one. EFBA's
+        entropy is extensive, so this is the score of the whole partial
+        aptamer, and it is what candidates are ranked on.
     energy : float
         Lowest total potential energy seen while sampling this candidate,
         in kJ/mol.
@@ -38,6 +43,10 @@ class Candidate(NamedTuple):
         Aptamer sequence this candidate would give.
     positions : list of openmm.Vec3
         Coordinates of the whole complex at the lowest-energy pose.
+    topology : openmm.app.Topology, optional
+        Topology matching `positions`. Carried by callers that write a PDB
+        for every step; left unset when the sequence is enough to rebuild
+        it.
 
     See Also
     --------
@@ -45,13 +54,25 @@ class Candidate(NamedTuple):
     """
 
     entropy: float
+    total: float
     energy: float
     sequence: str
     positions: object
+    topology: object = None
 
 
 def select_beam(candidates, width):
-    """Return the `width` best candidates, lowest score first.
+    """Return the `width` best candidates, lowest running total first.
+
+    Ranks on :attr:`Candidate.total` rather than the score of the step that
+    produced each candidate. Candidates in one step can descend from
+    different parents, and those parents scored differently. Ranking on the
+    step alone would weigh a strong lineage against a weak one as though
+    their histories were equal, letting one lucky step displace a
+    consistently better sequence.
+
+    With ``width=1`` every candidate shares a parent, so the common part of
+    the total cancels and the order matches the step scores.
 
     Parameters
     ----------
@@ -63,8 +84,8 @@ def select_beam(candidates, width):
     Returns
     -------
     list of Candidate
-        At most `width` candidates, ordered by score. Shorter than `width`
-        when fewer were scored.
+        At most `width` candidates, ordered by running total. Shorter than
+        `width` when fewer were scored.
 
     See Also
     --------
@@ -72,12 +93,17 @@ def select_beam(candidates, width):
 
     Examples
     --------
+    The second candidate scored better on this step, and still loses.
+
     >>> from maws.run import Candidate, select_beam
-    >>> scored = [Candidate(-0.2, 0.0, "A", None), Candidate(-0.9, 0.0, "G", None)]
+    >>> scored = [
+    ...     Candidate(-0.2, -2.0, 0.0, "GG", None),
+    ...     Candidate(-0.9, -1.0, 0.0, "AA", None),
+    ... ]
     >>> [c.sequence for c in select_beam(scored, width=1)]
-    ['G']
+    ['GG']
     """
-    return sorted(candidates, key=attrgetter("entropy"))[:width]
+    return sorted(candidates, key=attrgetter("total"))[:width]
 
 
 @dataclass(frozen=True)
@@ -467,7 +493,7 @@ class MawsRunner:
                 free_E,
             )
 
-            scored.append(Candidate(entropy, free_E, ntide, position[:]))
+            scored.append(Candidate(entropy, entropy, free_E, ntide, position[:]))
 
         beam = select_beam(scored, self.beam)
         log.debug("After step1 beam=%s", [(c.sequence, c.entropy) for c in beam])
@@ -540,12 +566,22 @@ class MawsRunner:
                     )
 
                     scored.append(
-                        Candidate(entropy, free_E, aptamer.alias_sequence, position[:])
+                        Candidate(
+                            entropy,
+                            parent.total + entropy,
+                            free_E,
+                            aptamer.alias_sequence,
+                            position[:],
+                        )
                     )
 
             beam = select_beam(scored, self.beam)
 
-        best_entropy, best_energy, best_sequence, best_positions = beam[0]
+        best = beam[0]
+        best_entropy = best.entropy
+        best_energy = best.energy
+        best_sequence = best.sequence
+        best_positions = best.positions
 
         # Optional final PDB artifact
         written_pdb = None

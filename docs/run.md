@@ -142,7 +142,17 @@ runner = MawsRunner(
 )
 ```
 
-The CLI (`maws.maws2023`) has no `--beam` flag and always runs greedy, which is the EFBA behaviour.
+The CLI takes the same setting as `--beam`:
+
+```
+python -m maws.maws2023 --path data/1BRQ.pdb --beam 3
+```
+
+### Ranking across the beam
+
+Candidates are ranked on the **running total** of the score, summed over every step so far, not on the score of the step that produced them. EFBA's entropy is extensive, so the total is the score of the whole partial aptamer.
+
+This only matters above `beam=1`. Beam members carry different histories, so ranking their children on the current step alone would weigh a strong lineage against a weak one as though their pasts were equal, and one lucky step could displace a consistently better sequence. At `beam=1` every candidate in a step shares a parent, the common part of the total cancels, and the order is identical to ranking on the step.
 
 ## Usage Examples
 
