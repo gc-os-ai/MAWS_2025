@@ -89,29 +89,30 @@ def _boltzmann(sample, beta):
 def entropy_score(sample, beta=0.01):
     r"""entropy_score(sample, beta=0.01) -> float
 
-    Return how concentrated a candidate's sampled energies are.
+    Return how tightly a candidate's sampled conformations cluster.
 
-    The energies become a Boltzmann distribution. The result is that
-    distribution's distance from uniform, negated. It is at most 0. It
-    reaches 0 when every sampled energy is equal, and falls towards
-    ``-log N`` as the weight gathers onto a single shape. MAWS keeps the
-    candidate scoring lowest.
+    A conformation is one shape the strand can take against the target.
+    Sampling a candidate gives one energy per conformation. Those energies
+    become a Boltzmann distribution, and the result is how far that
+    distribution sits from uniform, with the sign flipped so that lower
+    means more concentrated. MAWS keeps the candidate scoring lowest.
 
     Parameters
     ----------
     sample : array-like
-        The energy of each sampled shape of one candidate strand, in kJ/mol.
-        At least one is required.
+        The energy of each sampled conformation of one candidate strand, in
+        kJ/mol. At least one is required.
     beta : float, default=0.01
         How sharply lower energies are favoured, in mol/kJ. Raising it makes
-        the score depend mostly on the few lowest-energy shapes; at 0 every
-        shape weighs the same and the score is 0.
+        the score depend mostly on the few lowest-energy conformations. At 0
+        every conformation weighs the same and the score is 0.
 
     Returns
     -------
     float
-        Zero when every shape is equally likely, and increasingly negative as
-        the weight concentrates onto fewer shapes.
+        A value between ``-log N`` and 0, for a sample of *N* conformations.
+        It reaches 0 when every energy is equal, and approaches ``-log N``
+        as the weight gathers onto a single conformation.
 
     Raises
     ------
@@ -121,26 +122,48 @@ def entropy_score(sample, beta=0.01):
 
     See Also
     --------
-    maws.space.draw_clear_torsions : Keeps clashing shapes out of `sample`.
-    maws.space.ClashFilter : Makes the accept/reject decision for a shape.
+    maws.space.draw_clear_torsions : Keeps clashes out of `sample`.
+    maws.run.MawsRunner : Runs the search this score decides.
 
     Notes
     -----
-    Each shape *i* is weighted by its Boltzmann factor, normalised to a
-    probability, and the result is the negative relative entropy of that
-    distribution against a uniform one over the same *N* shapes:
+    Each conformation *i* carries its Boltzmann weight, normalised to a
+    probability. The result is the negative relative entropy of that
+    distribution against a uniform one over the same *N* conformations:
 
     .. math::
         p_i = \frac{e^{-\beta E_i}}{\sum_j e^{-\beta E_j}}
         \qquad
         S = -\sum_i p_i \ln(p_i N)
 
-    The factor :math:`N` inside the logarithm puts the zero point at "every
-    shape equally likely" whatever *N* is, so candidates sampled a different
-    number of times stay comparable.
+    Weights are evaluated in log-space via :func:`scipy.special.logsumexp`,
+    so energies spanning thousands of kJ/mol neither underflow nor overflow.
 
-    Weights are evaluated in log-space via :func:`scipy.special.logsumexp`, so
-    energies spanning thousands of kJ/mol neither underflow nor overflow.
+    .. warning::
+        Compare scores only between candidates sampled the same number of
+        times. The factor :math:`N` fixes the zero point at "every
+        conformation equally likely" for any *N*, but the far end of the
+        range is ``-log N``. One dominant conformation therefore scores
+        about -4.6 at *N* = 100 and about -6.4 at *N* = 1000, for the same
+        situation. MAWS meets this by drawing a fixed number of
+        conformations per step.
+
+    .. warning::
+        The score reads only the spread of `sample`. Adding the same
+        constant to every energy leaves it unchanged. A candidate whose
+        conformations all sit at -5000 kJ/mol and one whose conformations
+        all sit at +5000 kJ/mol therefore score identically. The score
+        measures how tightly a candidate settles. Binding strength needs a
+        separate term.
+
+    .. warning::
+        Atoms placed on top of each other cost around 1e8 kJ/mol. In double
+        precision that conformation's Boltzmann weight is exactly 0, so it
+        leaves the distribution. A sample holding such conformations then
+        scores as though it had been sampled fewer times, which lowers the
+        score. Since MAWS keeps the lowest score, clashes make a candidate
+        look better. Keep them out of `sample`. The weighting will not
+        discount them for you.
 
     .. note::
         `beta` enters the source method as a Lagrange multiplier of the
@@ -150,31 +173,23 @@ def entropy_score(sample, beta=0.01):
         corresponds to about 12,000 K. That is why it differs from the
         0.401 mol/kJ of a 300 K calculation.
 
-    .. warning::
-        The score reads only the spread of `sample`. Adding the same
-        constant to every energy leaves it unchanged. A candidate whose
-        shapes all sit at -5000 kJ/mol and one whose shapes all sit at
-        +5000 kJ/mol therefore score identically. The score measures how
-        tightly a candidate settles. Binding strength needs a separate
-        term.
-
-    .. warning::
-        Atoms placed on top of each other cost around 1e8 kJ/mol. In double
-        precision that shape's Boltzmann weight is exactly 0, so it leaves
-        the distribution. A sample holding such shapes then scores as though
-        it had been sampled fewer times, which lowers the score. Since MAWS
-        keeps the lowest score, clashes make a candidate look better. Keep
-        them out of `sample`. The weighting will not discount them for
-        you.
+    References
+    ----------
+    .. [1] Tseng, C.-Y., Ashrafuzzaman, M., Mane, J. Y., Kapty, J., Mercer,
+           J. R., Tuszynski, J. A. (2011). "Entropic Fragment-Based Approach
+           to Aptamer Design". Chemical Biology & Drug Design 78(1), 1-13.
 
     Examples
     --------
-    Ten shapes, one far better than the rest, against ten much of a muchness.
-    The first scores lower, meaning more promising.
+    Two samples of ten conformations each. In the first, one conformation
+    sits 1000 kJ/mol below the other nine, so nearly all the weight lands
+    on it. In the second the gap is 10 kJ/mol, so the weight stays spread
+    across all ten. The concentrated sample scores lower, and MAWS keeps
+    the lowest.
 
-    >>> one_clear_winner = entropy_score([0.0] + [1000.0] * 9)
-    >>> nothing_to_choose = entropy_score([0.0] + [10.0] * 9)
-    >>> one_clear_winner < nothing_to_choose
+    >>> concentrated = entropy_score([0.0] + [1000.0] * 9)
+    >>> spread = entropy_score([0.0] + [10.0] * 9)
+    >>> concentrated < spread
     True
 
     Equal energies score exactly zero.
@@ -187,6 +202,14 @@ def entropy_score(sample, beta=0.01):
     >>> shifted = entropy_score([5100.0, 5150.0, 5200.0])
     >>> abs(entropy_score([100.0, 150.0, 200.0]) - shifted) < 1e-12
     True
+
+    The same situation, one dominant conformation, scores differently at
+    different sample sizes. These two numbers are not comparable.
+
+    >>> round(entropy_score([0.0] + [1000.0] * 99), 3)
+    -4.556
+    >>> round(entropy_score([0.0] + [1000.0] * 999), 3)
+    -6.43
     """
     energies = np.asarray(sample, dtype=float)
     if energies.size == 0:
