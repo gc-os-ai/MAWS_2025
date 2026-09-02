@@ -115,6 +115,18 @@ class TestSelectBeam:
         beam = select_beam([self._candidate(-0.2, "A")], width=5)
         assert len(beam) == 1
 
+    def test_an_empty_field_gives_an_empty_beam(self) -> None:
+        """A step where every candidate was unviable returns nothing.
+
+        `draw_clear_torsions` raises when a nucleotide cannot be bent clear
+        of the target, which happens when the strand's growing end is buried.
+        The search skips that candidate rather than dying, so a step can end
+        with fewer candidates than it started with, or none at all.
+        """
+        from maws.run import select_beam
+
+        assert select_beam([], width=3) == []
+
     def test_tied_scores_do_not_compare_the_rest_of_the_candidate(self) -> None:
         """A tie is broken without touching `positions`.
 

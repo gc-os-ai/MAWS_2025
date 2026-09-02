@@ -498,18 +498,31 @@ def main():
                         tolerance=args.clash_tolerance,
                     )
 
-                    for _ in range(SECOND_CHUNK_SIZE):
-                        space.draw_clear_torsions(
-                            cx, aptamer, rotations, clash, append=append
+                    try:
+                        for _ in range(SECOND_CHUNK_SIZE):
+                            space.draw_clear_torsions(
+                                cx, aptamer, rotations, clash, append=append
+                            )
+
+                            energy = cx.get_energy()[0]
+                            if free_E is None or energy < free_E:
+                                free_E = energy
+                                position = cx.positions[:]
+                            energies.append(energy)
+
+                            cx.positions = positions0[:]
+                    except space.SamplingError:
+                        # The strand's growing end is buried, so no turn of the
+                        # new nucleotide clears the target. That rules this
+                        # candidate out; it does not rule out the others.
+                        logger.warning(
+                            "Step %d: %s on the %s end cannot be placed clear "
+                            "of the target. Skipping this candidate.",
+                            i + 1,
+                            ntide,
+                            "3'" if append else "5'",
                         )
-
-                        energy = cx.get_energy()[0]
-                        if free_E is None or energy < free_E:
-                            free_E = energy
-                            position = cx.positions[:]
-                        energies.append(energy)
-
-                        cx.positions = positions0[:]
+                        continue
 
                     entropy = entropy_score(energies, beta=BETA)
 
@@ -540,6 +553,13 @@ def main():
                         )
                     )
 
+            if not scored:
+                raise space.SamplingError(
+                    f"No candidate could be placed clear of the target at step "
+                    f"{i + 1}. Every way of growing {[c.sequence for c in beam]} "
+                    f"was blocked. Raise --clash-tolerance, or start from a "
+                    f"different first nucleotide."
+                )
             beam = select_beam(scored, BEAM)
             best = beam[0]
             best_sequence = best.sequence
