@@ -50,6 +50,119 @@ def test_maws_runner_smoke(tmp_path: Path) -> None:
     assert Path(result.pdb_path).stat().st_size > 0
 
 
+class TestSelectBeam:
+    """Tests for select_beam, which decides what survives a search step.
+
+    The beam is what makes a wrong early choice recoverable. Keeping one
+    candidate is the greedy search EFBA specifies; keeping more is the
+    departure described in `MawsRunner`.
+    """
+
+    @staticmethod
+    def _candidate(entropy, sequence, total=None):
+        from maws.run import Candidate
+
+        return Candidate(
+            entropy=entropy,
+            total=entropy if total is None else total,
+            energy=0.0,
+            sequence=sequence,
+            positions=[],
+        )
+
+    def test_candidates_are_ranked_by_the_running_total(self) -> None:
+        """A lucky step does not let a weak lineage displace a strong one.
+
+        EFBA's entropy is extensive, so an aptamer's score is the sum over
+        every nucleotide in it. Beam members carry different histories, so
+        ranking their children on the current step alone would weigh a
+        strong lineage against a weak one as though they were equal.
+        """
+        from maws.run import select_beam
+
+        lucky_step = self._candidate(-0.9, "AA", total=-1.0)
+        strong_line = self._candidate(-0.2, "GG", total=-2.0)
+        beam = select_beam([lucky_step, strong_line], width=1)
+        assert [c.sequence for c in beam] == ["GG"]
+
+    def test_the_lowest_scoring_candidate_comes_first(self) -> None:
+        """Candidates are ordered by score, lowest first."""
+        from maws.run import select_beam
+
+        beam = select_beam(
+            [
+                self._candidate(-0.2, "A"),
+                self._candidate(-0.9, "G"),
+                self._candidate(-0.5, "C"),
+            ],
+            width=3,
+        )
+        assert [c.sequence for c in beam] == ["G", "C", "A"]
+
+    def test_a_width_of_one_keeps_only_the_winner(self) -> None:
+        """Width 1 is the greedy search EFBA specifies."""
+        from maws.run import select_beam
+
+        beam = select_beam(
+            [self._candidate(-0.2, "A"), self._candidate(-0.9, "G")], width=1
+        )
+        assert [c.sequence for c in beam] == ["G"]
+
+    def test_a_width_wider_than_the_field_keeps_everything(self) -> None:
+        """Asking for more candidates than exist returns the ones that do."""
+        from maws.run import select_beam
+
+        beam = select_beam([self._candidate(-0.2, "A")], width=5)
+        assert len(beam) == 1
+
+    def test_an_empty_field_gives_an_empty_beam(self) -> None:
+        """A step where every candidate was unviable returns nothing.
+
+        `draw_clear_torsions` raises when a nucleotide cannot be bent clear
+        of the target, which happens when the strand's growing end is buried.
+        The search skips that candidate rather than dying, so a step can end
+        with fewer candidates than it started with, or none at all.
+        """
+        from maws.run import select_beam
+
+        assert select_beam([], width=3) == []
+
+    def test_tied_scores_do_not_compare_the_rest_of_the_candidate(self) -> None:
+        """A tie is broken without touching `positions`.
+
+        Positions are arrays. Ordering two candidates by comparing whole
+        records would reach them on a tie, and comparing arrays raises
+        rather than returning an order.
+        """
+        import numpy as np
+
+        from maws.run import Candidate, select_beam
+
+        tied = [
+            Candidate(-0.5, -0.5, 0.0, "G", np.zeros((3, 3))),
+            Candidate(-0.5, -0.5, 0.0, "A", np.ones((3, 3))),
+        ]
+        assert len(select_beam(tied, width=2)) == 2
+
+
+def test_runner_defaults_to_the_greedy_search_efba_specifies() -> None:
+    """`beam` defaults to 1, so a default run follows the published method."""
+    runner = MawsRunner(num_nucleotides=1, aptamer_type="RNA", molecule_type="protein")
+    assert runner.beam == 1
+
+
+@pytest.mark.parametrize("beam", [0, -1])
+def test_runner_rejects_a_beam_narrower_than_one(beam: int) -> None:
+    """A search has to carry at least one candidate between steps."""
+    with pytest.raises(ValueError, match="beam must be >= 1"):
+        MawsRunner(
+            num_nucleotides=1,
+            aptamer_type="RNA",
+            molecule_type="protein",
+            beam=beam,
+        )
+
+
 def test_runner_rejects_negative_reach() -> None:
     """MawsRunner raises ValueError on negative reach (no integration setup needed)."""
     with pytest.raises(ValueError, match="reach must be >= 0"):

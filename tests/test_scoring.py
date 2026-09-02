@@ -1,5 +1,5 @@
 """
-Tests for maws.routines module.
+Tests for maws.scoring module.
 
 This module tests the entropy scoring function used in the MAWS algorithm:
 - entropy_score(): Compute entropy from Boltzmann-weighted energy samples
@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pytest
 
-from maws.routines import _boltzmann, entropy_score
+from maws.scoring import _boltzmann, entropy_score
 
 
 class TestEntropyScore:

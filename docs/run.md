@@ -33,7 +33,8 @@ runner = MawsRunner(
 | `num_nucleotides` | `int` | *required* | Number of nucleotides to design |
 | `aptamer_type` | `"RNA"` or `"DNA"` | *required* | Aptamer type |
 | `molecule_type` | `"protein"`, `"organic"`, `"lipid"` | *required* | Ligand type |
-| `beta` | `float` | `0.01` | Inverse temperature for the entropy score (see [docs/routines.md](routines.md)) |
+| `beam` | `int` | `1` | How many candidates to carry from one step to the next. `1` is the greedy search EFBA specifies. Above `1` is a deliberate departure — see [Beam search](#beam-search) |
+| `beta` | `float` | `0.01` | How sharply lower energies are favoured in the entropy score, in mol/kJ. A Lagrange multiplier from the source method, not a temperature (see [docs/scoring.md](scoring.md)) |
 | `first_chunk_size` | `int` | `5000` | Samples in first step |
 | `second_chunk_size` | `int` | `5000` | Samples in subsequent steps |
 | `clean_pdb` | `bool` | `False` | Clean input PDB |
@@ -51,7 +52,7 @@ runner = MawsRunner(
 | `salt_conc` | `float` | `0.15` | Monovalent salt conc. (mol/L) for GB Debye–Hückel screening; `0` = unscreened |
 | `seed` | `int` | `None` | Seed for every random draw. Omit it and the run draws one, logs it, and returns it on `MawsResult` |
 
-The constructor raises `ValueError` for `num_nucleotides <= 0`, a non-positive chunk size, or a negative `reach`, `probe`, `clash_tolerance`, or `salt_conc`, and `TypeError` for a non-integer `seed`. The sampler arguments are checked when `run()` builds the sampler.
+The constructor raises `ValueError` for `num_nucleotides <= 0`, a `beam` below 1, a non-positive chunk size, or a negative `reach`, `probe`, `clash_tolerance`, or `salt_conc`, and `TypeError` for a non-integer `seed`. The sampler arguments are checked when `run()` builds the sampler.
 
 The ligand PDB path is **not** a constructor argument — it is passed to `run()`, so one configured runner can be reused across several ligands.
 
@@ -110,10 +111,48 @@ Frozen dataclass returned by `MawsRunner.run`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `sequence` | `str` | Best aptamer sequence found |
-| `energy` | `float` | Energy of the final best configuration; `nan` if no candidate was scored |
-| `entropy` | `float` | Entropy score used for selection (`maws.routines.entropy_score`; ≤ 0, lower is better) |
+| `energy` | `float` | Lowest total potential energy of the whole complex over the sampled poses; `nan` if no candidate was scored. **Not a binding energy** — no unbound reference, dominated by the target's own internal energy, not comparable between candidates, and never used to select anything (issue #49, C4) |
+| `entropy` | `float` | Entropy score used for selection (`maws.scoring.entropy_score`; ≤ 0, lower is better) |
 | `pdb_path` | `str \| None` | Path to the written PDB, or `None` when `output_pdb` was not given |
 | `seed` | `int \| None` | The seed the run used. Pass it back as `MawsRunner(seed=...)` to reproduce this result |
+
+
+## Beam search
+
+> **This is a departure from EFBA.** Added by Siddharth in 2026. The rest of the search follows the published method; this parameter does not. The default of `beam=1` reproduces EFBA exactly, so a run only leaves the method when you ask it to.
+
+EFBA specifies a greedy seed-and-grow search: score every nucleotide that could be added, commit to the best one, never revisit it. A wrong choice at step 2 then constrains every step after it, with no way back.
+
+`beam` keeps the runners-up alive:
+
+| `beam` | Behaviour | Cost per step |
+|---|---|---|
+| `1` | Greedy. The published method | `8` candidates |
+| `3` | Three partial sequences stay in play; each is grown every way | `24` candidates |
+| `k` | `k` partial sequences | `8k` candidates |
+
+Cost grows linearly in `beam`, and each candidate needs a LEaP rebuild and a minimisation, so `beam=3` roughly triples the wall-clock time of a run.
+
+```python
+runner = MawsRunner(
+    num_nucleotides=15,
+    aptamer_type="RNA",
+    molecule_type="protein",
+    beam=3,          # keep the top three partial sequences at every step
+)
+```
+
+The CLI takes the same setting as `--beam`:
+
+```
+python -m maws.maws2023 --path data/1BRQ.pdb --beam 3
+```
+
+### Ranking across the beam
+
+Candidates are ranked on the **running total** of the score, summed over every step so far, not on the score of the step that produced them. EFBA's entropy is extensive, so the total is the score of the whole partial aptamer.
+
+This only matters above `beam=1`. Beam members carry different histories, so ranking their children on the current step alone would weigh a strong lineage against a weak one as though their pasts were equal, and one lucky step could displace a consistently better sequence. At `beam=1` every candidate in a step shares a parent, the common part of the total cancels, and the order is identical to ranking on the step.
 
 ## Usage Examples
 
@@ -200,7 +239,7 @@ for target, result in sorted(results.items(), key=lambda kv: kv[1].entropy):
 
 ## Logging
 
-`MawsRunner` logs through the standard `logging` module under the `maws.run` logger; it does not configure handlers itself. `verbose=True` promotes a handful of progress messages from DEBUG to INFO. To see output, configure logging in your own code:
+`MawsRunner` logs through the standard `logging` module under the `maws.run` logger; it does not configure handlers itself. `verbose=True` promotes the step-by-step progress messages from DEBUG to INFO. To see output, configure logging in your own code:
 
 ```python
 import logging

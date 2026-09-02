@@ -240,6 +240,26 @@ Draws a pose, places the strand, bends `residue` by a drawn set of torsion angle
 
 Both steps happen before the test. On 1BRQ, testing the placement alone still left contacts at `0.36 A`: the torsions swing atoms far enough to reach back into the target.
 
+## `new_residue_element`
+
+```python
+new_residue_element(chain, *, append: bool) -> list[int]
+```
+
+The `[start, bond, end)` range of the nucleotide a growth step has just added: the 3' residue when `append` is true, the 5' one when it is false. Pass it to `ClashFilter` so the filter treats that nucleotide as the moving part and the rest of the strand as rigid, alongside the target.
+
+## `draw_clear_torsions`
+
+```python
+draw_clear_torsions(
+    complex_obj, chain, rotations, clash, *, append, max_rejections=1000
+) -> np.ndarray
+```
+
+The growth-step counterpart of `draw_clear_conformation`. Step 1 places a strand and bends it; every step after keeps the strand where the step before left it and varies only the torsions of the new nucleotide. Those torsions still swing that nucleotide several angstrom, so each draw is checked before it is scored, and rejected draws are redrawn from the strand's starting coordinates.
+
+The last angle drawn turns the bond that carries the new nucleotide (`C3'-O3'` of the residue before it, when appending); the rest reshape the nucleotide itself.
+
 ## `SurfaceSampler`
 
 ```python

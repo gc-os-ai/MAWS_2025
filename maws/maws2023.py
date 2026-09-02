@@ -18,7 +18,8 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
-from maws.routines import entropy_score
+from maws.run import Candidate, select_beam
+from maws.scoring import entropy_score
 
 # VERSION = "2.1" # Original Authoras To-do: cite in readme
 # RELEASE_DATE = "2017" # Original Authors To-do: cite in readme
@@ -71,7 +72,28 @@ def parse_args():
         help="Type of ligand molecule.",
     )
     parser.add_argument(
-        "-b", "--beta", type=float, default=0.01, help="Inverse temperature."
+        "--beam",
+        type=int,
+        default=1,
+        help=(
+            "How many candidates to carry from one step into the next. "
+            "Default: 1, the greedy search the published method specifies. "
+            "Above 1 keeps runners-up alive so an early mistake stays "
+            "recoverable, and is a deliberate departure from that method. "
+            "Cost grows linearly."
+        ),
+    )
+    parser.add_argument(
+        "-b",
+        "--beta",
+        type=float,
+        default=0.01,
+        help=(
+            "How sharply lower energies are favoured in the entropy score "
+            "(mol/kJ). Default: 0.01, the value used by the method MAWS "
+            "implements, where it is a Lagrange multiplier rather than a "
+            "physical inverse temperature."
+        ),
     )
     parser.add_argument(
         "-c1",
@@ -204,6 +226,9 @@ def main():
     APTAMER_TYPE = args.aptamertype
     MOLECULE_TYPE = args.moleculetype
     N_ELEMENTS = 4  # rotatable backbone torsions per residue
+    BEAM = args.beam
+    if BEAM < 1:
+        raise SystemExit(f"--beam must be >= 1, got {BEAM}")
 
     # A run with no --seed still gets one, so its result can be reproduced
     # from the log afterwards.
@@ -334,11 +359,9 @@ def main():
         )
         rotations = space.NAngles(N_ELEMENTS, rng=rng)
 
-        # Tracking best candidate
-        best_entropy = None
+        scored: list[Candidate] = []
         best_sequence = None
         best_positions = None
-        # best_ntide = None
         best_topology = None
 
         logger.info("Initialized successfully; starting step 1.")
@@ -400,31 +423,49 @@ def main():
                 f"ENTROPY: {entropy} ENERGY: {free_E}\n"
             )
 
-            if best_entropy is None or entropy < best_entropy:
-                best_entropy = entropy
-                best_sequence = ntide
-                best_positions = position[:]
-                best_topology = copy.deepcopy(cx.topology)
+            scored.append(
+                Candidate(
+                    entropy,
+                    entropy,
+                    free_E,
+                    ntide,
+                    position[:],
+                    copy.deepcopy(cx.topology),
+                )
+            )
+
+        beam = select_beam(scored, BEAM)
+        best = beam[0]
+        best_sequence = best.sequence
+        best_positions = best.positions
+        best_topology = best.topology
 
         # Cache best-of-step to file
         app.PDBFile.writeModel(best_topology, best_positions, file=step, modelIndex=1)
         logger.info("Completed first step. Selected nucleotide: %s", best_sequence)
+        if BEAM > 1:
+            logger.info(
+                "Carrying %d candidates forward: %s",
+                len(beam),
+                [c.sequence for c in beam],
+            )
         logger.info("Starting further steps to append %d nucleotides", N_NTIDES)
 
         # ---- Steps 2..N: grow sequence --------------------------------------
         for i in range(1, N_NTIDES):
-            best_old_sequence = best_sequence
-            best_old_positions = best_positions[:]
-            best_entropy = None
+            scored = []
 
             logger.info(
-                "Step %d: starting with current best sequence %s",
+                "Step %d: starting from %s",
                 i + 1,
-                best_old_sequence,
+                [c.sequence for c in beam],
             )
 
-            for ntide in nt_list:
-                for append in [True, False]:
+            for parent in beam:
+                best_old_sequence = parent.sequence
+                best_old_positions = parent.positions[:]
+
+                for ntide, append in ((n, a) for n in nt_list for a in (True, False)):
                     energies = []
                     free_E = None
                     position = None
@@ -451,32 +492,37 @@ def main():
                     )
 
                     positions0 = cx.positions[:]
+                    clash = space.ClashFilter(
+                        cx,
+                        space.new_residue_element(aptamer, append=append),
+                        tolerance=args.clash_tolerance,
+                    )
 
-                    for _ in range(SECOND_CHUNK_SIZE):
-                        rotation = rotations.generator()
+                    try:
+                        for _ in range(SECOND_CHUNK_SIZE):
+                            space.draw_clear_torsions(
+                                cx, aptamer, rotations, clash, append=append
+                            )
 
-                        # Forward rotations on the new residue’s internal bonds
-                        for j in range(N_ELEMENTS - 1):
-                            if append:
-                                aptamer.rotate_in_residue(-1, j, rotation[j])
-                            else:
-                                aptamer.rotate_in_residue(
-                                    0, j, rotation[j], reverse=True
-                                )
+                            energy = cx.get_energy()[0]
+                            if free_E is None or energy < free_E:
+                                free_E = energy
+                                position = cx.positions[:]
+                            energies.append(energy)
 
-                        # Backward rotation (C3'-O3')
-                        if append:
-                            aptamer.rotate_in_residue(-2, 3, rotation[3])
-                        else:
-                            aptamer.rotate_in_residue(0, 3, rotation[3], reverse=True)
-
-                        energy = cx.get_energy()[0]
-                        if free_E is None or energy < free_E:
-                            free_E = energy
-                            position = cx.positions[:]
-                        energies.append(energy)
-
-                        cx.positions = positions0[:]
+                            cx.positions = positions0[:]
+                    except space.SamplingError:
+                        # The strand's growing end is buried, so no turn of the
+                        # new nucleotide clears the target. That rules this
+                        # candidate out; it does not rule out the others.
+                        logger.warning(
+                            "Step %d: %s on the %s end cannot be placed clear "
+                            "of the target. Skipping this candidate.",
+                            i + 1,
+                            ntide,
+                            "3'" if append else "5'",
+                        )
+                        continue
 
                     entropy = entropy_score(energies, beta=BETA)
 
@@ -496,22 +542,36 @@ def main():
                         f"ENTROPY: {entropy} ENERGY: {free_E}\n"
                     )
 
-                    if best_entropy is None or entropy < best_entropy:
-                        best_entropy = entropy
-                        best_positions = position[:]
-                        best_sequence = aptamer.alias_sequence
-                        best_topology = copy.deepcopy(cx.topology)
-
-                        logger.info(
-                            "Step %d: new best sequence %s "
-                            "(added '%s' on %s end; entropy=%s, best_E=%s)",
-                            i + 1,
-                            best_sequence,
-                            ntide,
-                            "3'" if append else "5'",
-                            best_entropy,
+                    scored.append(
+                        Candidate(
+                            entropy,
+                            parent.total + entropy,
                             free_E,
+                            aptamer.alias_sequence,
+                            position[:],
+                            copy.deepcopy(cx.topology),
                         )
+                    )
+
+            if not scored:
+                raise space.SamplingError(
+                    f"No candidate could be placed clear of the target at step "
+                    f"{i + 1}. Every way of growing {[c.sequence for c in beam]} "
+                    f"was blocked. Raise --clash-tolerance, or start from a "
+                    f"different first nucleotide."
+                )
+            beam = select_beam(scored, BEAM)
+            best = beam[0]
+            best_sequence = best.sequence
+            best_positions = best.positions
+            best_topology = best.topology
+            if BEAM > 1:
+                logger.info(
+                    "Step %d: carrying %d candidates forward: %s",
+                    i + 1,
+                    len(beam),
+                    [c.sequence for c in beam],
+                )
 
             app.PDBFile.writeModel(
                 best_topology, best_positions, file=step, modelIndex=1

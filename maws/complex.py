@@ -489,9 +489,9 @@ class Complex:
             Passed through to :meth:`build`. Only used when the cache misses.
         file_name : str, default="out"
             Passed through to :meth:`build` when writing.
-        exclusion : list, default=[]
-            Optional list of chains to *exclude* from coordinate mapping. Their
-            coordinates will come directly from the fresh build.
+        exclusion : list of Chain, optional
+            Chains to leave out of coordinate mapping. Their coordinates then
+            come straight from the fresh build. Defaults to excluding none.
 
         Notes
         -----
@@ -1271,7 +1271,7 @@ class Complex:
 
         Parameters
         ----------
-        size : float, default=1e-1
+        size : float, default=0.1
             Uniform kick magnitude in Å for each coordinate component.
         iterations : int, default=50
             Number of (kick → minimize) cycles to perform.

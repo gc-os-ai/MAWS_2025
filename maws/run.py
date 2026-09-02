@@ -4,8 +4,9 @@ import copy
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from operator import attrgetter
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numpy as np
 from openmm import app
@@ -15,12 +16,94 @@ from maws.complex import Complex
 from maws.dna_structure import load_dna_structure
 from maws.pdb_cleaner import resolve_pdb_path
 from maws.rna_structure import load_rna_structure
-from maws.routines import entropy_score
+from maws.scoring import entropy_score
 
 AptamerType = Literal["RNA", "DNA"]
 MoleculeType = Literal["protein", "organic", "lipid"]
 SamplerMode = Literal["sphere", "surface-following"]
 PDBInput = str | Path
+
+
+class Candidate(NamedTuple):
+    """One nucleotide choice a search step scored.
+
+    Parameters
+    ----------
+    entropy : float
+        Score from :func:`maws.scoring.entropy_score` for the step that
+        added this nucleotide. Lower is better.
+    total : float
+        Sum of `entropy` over every step so far, including this one. EFBA's
+        entropy is extensive, so this is the score of the whole partial
+        aptamer, and it is what candidates are ranked on.
+    energy : float
+        Lowest total potential energy seen while sampling this candidate,
+        in kJ/mol.
+    sequence : str
+        Aptamer sequence this candidate would give.
+    positions : list of openmm.Vec3
+        Coordinates of the whole complex at the lowest-energy pose.
+    topology : openmm.app.Topology, optional
+        Topology matching `positions`. Carried by callers that write a PDB
+        for every step; left unset when the sequence is enough to rebuild
+        it.
+
+    See Also
+    --------
+    select_beam : Chooses which of these survive a step.
+    """
+
+    entropy: float
+    total: float
+    energy: float
+    sequence: str
+    positions: object
+    topology: object = None
+
+
+def select_beam(candidates, width):
+    """Return the `width` best candidates, lowest running total first.
+
+    Ranks on :attr:`Candidate.total` rather than the score of the step that
+    produced each candidate. Candidates in one step can descend from
+    different parents, and those parents scored differently. Ranking on the
+    step alone would weigh a strong lineage against a weak one as though
+    their histories were equal, letting one lucky step displace a
+    consistently better sequence.
+
+    With ``width=1`` every candidate shares a parent, so the common part of
+    the total cancels and the order matches the step scores.
+
+    Parameters
+    ----------
+    candidates : iterable of Candidate
+        Every nucleotide choice scored in one search step.
+    width : int
+        How many to carry into the next step. 1 gives a greedy search.
+
+    Returns
+    -------
+    list of Candidate
+        At most `width` candidates, ordered by running total. Shorter than
+        `width` when fewer were scored.
+
+    See Also
+    --------
+    MawsRunner : Sets `width` from its ``beam`` parameter.
+
+    Examples
+    --------
+    The second candidate scored better on this step, and still loses.
+
+    >>> from maws.run import Candidate, select_beam
+    >>> scored = [
+    ...     Candidate(-0.2, -2.0, 0.0, "GG", None),
+    ...     Candidate(-0.9, -1.0, 0.0, "AA", None),
+    ... ]
+    >>> [c.sequence for c in select_beam(scored, width=1)]
+    ['GG']
+    """
+    return sorted(candidates, key=attrgetter("total"))[:width]
 
 
 @dataclass(frozen=True)
@@ -33,9 +116,19 @@ class MawsResult:
     sequence : str
         Best aptamer sequence found.
     energy : float
-        Energy of the final best configuration.
+        Lowest total potential energy of the whole complex over the poses
+        sampled for the winning candidate, in kJ/mol.
+
+        .. warning::
+            This is not a binding energy and nothing in the search branches
+            on it. There is no unbound reference subtracted, so it is
+            dominated by the target's own internal energy, and candidates
+            with different atom counts do not produce comparable values.
+            Selection is decided entirely by `entropy`. See issue #49 (C4).
     entropy : float
-        Entropy score used for selection.
+        Score the selection was actually made on, from
+        :func:`maws.scoring.entropy_score`. At most 0, and the candidate
+        scoring lowest is the one kept.
     pdb_path : str
         Path to the saved result PDB file produced by the run.
     seed : int
@@ -51,12 +144,118 @@ class MawsResult:
 
 
 class MawsRunner:
+    r"""Design an aptamer against a target molecule.
+
+    Grows a strand of DNA or RNA one nucleotide at a time. Each step scores
+    every nucleotide that could be added, using the entropic criterion of
+    :func:`maws.scoring.entropy_score`, and carries the best `beam`
+    candidates into the next step.
+
+    Parameters
+    ----------
+    num_nucleotides : int
+        Length of the aptamer to design.
+    aptamer_type : {"RNA", "DNA"}
+        Chemistry of the strand being grown.
+    molecule_type : {"protein", "organic", "lipid"}
+        Chemistry of the target, which selects its force field.
+    beam : int, default=1
+        How many candidates to carry from one step into the next. 1 commits
+        to the single best nucleotide at every step. Larger values keep
+        runners-up alive, so a wrong early choice stays recoverable, at a
+        cost in run time that grows linearly.
+
+        .. versionadded:: 0.1
+    beta : float, default=0.01
+        How sharply lower energies are favoured in the score, in mol/kJ.
+        A Lagrange multiplier rather than a physical inverse temperature;
+        see :func:`maws.scoring.entropy_score`.
+    first_chunk_size : int, default=5000
+        Conformations sampled per candidate in the first step.
+    second_chunk_size : int, default=5000
+        Conformations sampled per candidate in every step after the first.
+    clean_pdb : bool, default=False
+        If True, repairs the input PDB before LEaP reads it. Use for
+        protein targets.
+    keep_chains : str, default="all"
+        Which chains the cleaner keeps: ``"all"``, ``"one"``, or a comma
+        separated list such as ``"A,B"``.
+    remove_h : bool, default=False
+        If True, the cleaner strips hydrogens.
+    drop_hetatm : bool, default=False
+        If True, the cleaner drops every HETATM record.
+    verbose : bool, default=False
+        If True, reports each step at INFO level rather than DEBUG.
+    sampler_mode : {"surface-following", "sphere"}
+        Shape of the region poses are drawn from. ``"surface-following"``
+        keeps poses within `d_max` of the target's surface. ``"sphere"``
+        fills a ball around the target, most of which is open solvent.
+    reach : float, default=10.0
+        How far past the target's furthest atom the sampling region
+        extends, in angstrom.
+    d_max : float, default=6.0
+        How far from the target's surface a pose may sit, in angstrom, for
+        ``sampler_mode="surface-following"``.
+    site_centre : sequence of float, optional
+        Sample around this point rather than the whole target, in the input
+        PDB's coordinates. Give it when the binding site is known.
+    site_radius : float, optional
+        How far the region reaches from `site_centre`, in angstrom.
+    probe : float, default=1.4
+        Radius in angstrom of the ball rolled over the target to find its
+        surface. 1.4 is the size of a water molecule.
+    clash_tolerance : float, default=1.0
+        How far a placed strand may overlap the target's van der Waals
+        spheres before the pose is redrawn, in angstrom.
+    salt_conc : float, default=0.15
+        Monovalent salt concentration in mol/L, for Debye-Huckel screening
+        in the implicit solvent. 0 leaves electrostatics unscreened.
+    seed : int, optional
+        Seed for every random draw, making the run repeatable. Defaults to
+        a fresh seed each run, reported in the log and in
+        :attr:`MawsResult.seed`.
+
+    See Also
+    --------
+    maws.scoring.entropy_score : The criterion each step is decided on.
+    select_beam : Chooses which candidates survive a step.
+
+    Notes
+    -----
+    The scoring criterion and the one-nucleotide-at-a-time growth follow the
+    Entropic Fragment-Based Approach of Tseng et al. [1]_, the method MAWS
+    was built on [2]_.
+
+    ``beam`` is a deliberate departure from that method, added by Siddharth
+    in 2026. EFBA specifies a greedy seed-and-grow search, which commits to
+    one nucleotide per step and never revisits it, so a wrong choice early
+    constrains every step after it. A beam keeps the runners-up alive and
+    gives the search a way back. **The default of 1 reproduces the
+    published method exactly**; any value above 1 leaves it.
+
+    References
+    ----------
+    .. [1] Tseng, C.-Y., Ashrafuzzaman, M., Mane, J. Y., Kapty, J., Mercer,
+           J. R., Tuszynski, J. A. (2011). "Entropic Fragment-Based Approach
+           to Aptamer Design". Chemical Biology & Drug Design 78(1), 1-13.
+    .. [2] Kalinowski, M. et al. (2016). "MAWS - Making Aptamers Without
+           SELEX". iGEM Heidelberg.
+
+    Examples
+    --------
+    >>> runner = MawsRunner(  # doctest: +SKIP
+    ...     num_nucleotides=15, aptamer_type="RNA", molecule_type="protein"
+    ... )
+    >>> result = runner.run(pdb="data/1BRQ.pdb")  # doctest: +SKIP
+    """
+
     def __init__(
         self,
         *,
         num_nucleotides: int,
         aptamer_type: AptamerType,
         molecule_type: MoleculeType,
+        beam: int = 1,
         beta: float = 0.01,
         first_chunk_size: int = 5000,
         second_chunk_size: int = 5000,
@@ -79,6 +278,8 @@ class MawsRunner:
             raise ValueError(
                 f"num_nucleotides must be greater than 0, got {num_nucleotides}"
             )
+        if beam < 1:
+            raise ValueError(f"beam must be >= 1, got {beam}")
         if first_chunk_size <= 0 or second_chunk_size <= 0:
             raise ValueError("Chunk size must be greater than 0")
         if reach < 0:
@@ -95,6 +296,7 @@ class MawsRunner:
         self.num_nucleotides = num_nucleotides
         self.aptamer_type = aptamer_type
         self.molecule_type = molecule_type
+        self.beam = beam
         self.beta = beta
         self.first_chunk_size = first_chunk_size
         self.second_chunk_size = second_chunk_size
@@ -250,18 +452,13 @@ class MawsRunner:
         )
         rotations = space.NAngles(N_BACKBONE_TORSIONS, rng=rng)
 
-        # Track best candidate across steps
-        best_entropy = None
-        best_energy = None
-        best_sequence = None
-        best_positions = None
-
         if self.verbose:
             log.info("MAWS step 1: selecting first nucleotide")
         else:
             log.debug("Step 1 start")
 
         # ---- Step 1: choose first nucleotide ----
+        scored: list[Candidate] = []
         for ntide in nt_list:
             energies = []
             free_E = None
@@ -296,31 +493,23 @@ class MawsRunner:
                 free_E,
             )
 
-            if best_entropy is None or entropy < best_entropy:
-                best_entropy = entropy
-                best_energy = free_E
-                best_sequence = ntide
-                best_positions = position[:]
+            scored.append(Candidate(entropy, entropy, free_E, ntide, position[:]))
 
-        log.debug(
-            "After step1 best_sequence=%s best_entropy=%s", best_sequence, best_entropy
-        )
+        beam = select_beam(scored, self.beam)
+        log.debug("After step1 beam=%s", [(c.sequence, c.entropy) for c in beam])
 
         # ---- Steps 2..N: grow sequence (append or prepend) ----
         if self.verbose:
             log.info("MAWS steps 2..N: growing sequence")
         for i in range(1, self.num_nucleotides):
-            best_old_sequence = best_sequence
-            best_old_positions = best_positions[:]
+            scored = []
+            log.debug("Step%d starting from %s", i + 1, [c.sequence for c in beam])
 
-            # per-step selection (same as CLI)
-            best_entropy = None
-            best_energy = None
+            for parent in beam:
+                best_old_sequence = parent.sequence
+                best_old_positions = parent.positions[:]
 
-            log.debug("Step%d starting best_old_sequence=%s", i + 1, best_old_sequence)
-
-            for ntide in nt_list:
-                for append in (True, False):
+                for ntide, append in ((n, a) for n in nt_list for a in (True, False)):
                     energies = []
                     free_E = None
                     position = None
@@ -346,32 +535,37 @@ class MawsRunner:
                     )
 
                     positions0 = cx.positions[:]
+                    clash = space.ClashFilter(
+                        cx,
+                        space.new_residue_element(aptamer, append=append),
+                        tolerance=self.clash_tolerance,
+                    )
 
-                    for _ in range(self.second_chunk_size):
-                        rotation = rotations.generator()
+                    try:
+                        for _ in range(self.second_chunk_size):
+                            space.draw_clear_torsions(
+                                cx, aptamer, rotations, clash, append=append
+                            )
 
-                        # Forward rotations on the new residue’s internal bonds
-                        for j in range(N_BACKBONE_TORSIONS - 1):
-                            if append:
-                                aptamer.rotate_in_residue(-1, j, rotation[j])
-                            else:
-                                aptamer.rotate_in_residue(
-                                    0, j, rotation[j], reverse=True
-                                )
+                            energy = cx.get_energy()[0]
+                            if free_E is None or energy < free_E:
+                                free_E = energy
+                                position = cx.positions[:]
+                            energies.append(energy)
 
-                        # Backward rotation (C3'-O3')
-                        if append:
-                            aptamer.rotate_in_residue(-2, 3, rotation[3])
-                        else:
-                            aptamer.rotate_in_residue(0, 3, rotation[3], reverse=True)
-
-                        energy = cx.get_energy()[0]
-                        if free_E is None or energy < free_E:
-                            free_E = energy
-                            position = cx.positions[:]
-                        energies.append(energy)
-
-                        cx.positions = positions0[:]
+                            cx.positions = positions0[:]
+                    except space.SamplingError:
+                        # The strand's growing end is buried, so no turn of the
+                        # new nucleotide clears the target. That rules this
+                        # candidate out; it does not rule out the others.
+                        log.warning(
+                            "Step%d: %s on the %s end cannot be placed clear of "
+                            "the target. Skipping this candidate.",
+                            i + 1,
+                            ntide,
+                            "3'" if append else "5'",
+                        )
+                        continue
 
                     entropy = entropy_score(energies, beta=self.beta)
                     log.debug(
@@ -384,11 +578,30 @@ class MawsRunner:
                         free_E,
                     )
 
-                    if best_entropy is None or entropy < best_entropy:
-                        best_entropy = entropy
-                        best_energy = free_E
-                        best_sequence = aptamer.alias_sequence
-                        best_positions = position[:]
+                    scored.append(
+                        Candidate(
+                            entropy,
+                            parent.total + entropy,
+                            free_E,
+                            aptamer.alias_sequence,
+                            position[:],
+                        )
+                    )
+
+            if not scored:
+                raise space.SamplingError(
+                    f"No candidate could be placed clear of the target at step "
+                    f"{i + 1}. Every way of growing {[c.sequence for c in beam]} "
+                    f"was blocked. Raise --clash-tolerance, or start from a "
+                    f"different first nucleotide."
+                )
+            beam = select_beam(scored, self.beam)
+
+        best = beam[0]
+        best_entropy = best.entropy
+        best_energy = best.energy
+        best_sequence = best.sequence
+        best_positions = best.positions
 
         # Optional final PDB artifact
         written_pdb = None
