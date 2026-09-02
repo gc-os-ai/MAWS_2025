@@ -239,7 +239,7 @@ for target, result in sorted(results.items(), key=lambda kv: kv[1].entropy):
 
 ## Logging
 
-`MawsRunner` logs through the standard `logging` module under the `maws.run` logger; it does not configure handlers itself. `verbose=True` promotes a handful of progress messages from DEBUG to INFO. To see output, configure logging in your own code:
+`MawsRunner` logs through the standard `logging` module under the `maws.run` logger; it does not configure handlers itself. `verbose=True` promotes the step-by-step progress messages from DEBUG to INFO. To see output, configure logging in your own code:
 
 ```python
 import logging

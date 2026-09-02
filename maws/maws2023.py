@@ -359,11 +359,9 @@ def main():
         )
         rotations = space.NAngles(N_ELEMENTS, rng=rng)
 
-        # Tracking best candidate
         scored: list[Candidate] = []
         best_sequence = None
         best_positions = None
-        # best_ntide = None
         best_topology = None
 
         logger.info("Initialized successfully; starting step 1.")

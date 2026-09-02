@@ -444,9 +444,9 @@ def compute_envelope_dims(complex_obj, reach: float) -> dict:
 
     Parameters
     ----------
-    complex_obj
-        Object with ``.positions`` (Quantity) and ``.topology.atoms()``
-        (yielding atoms with ``.element.mass``).
+    complex_obj : maws.complex.Complex
+        Anything with ``.positions`` (Quantity) and ``.topology.atoms()``,
+        whose atoms carry ``.element.mass``.
     reach : float
         How far the envelope extends past the ligand's bounding radius (Å).
 
@@ -497,9 +497,8 @@ def draw_clear_conformation(
         conformation.
     chain : maws.chain.Chain
         The strand being placed and bent.
-    sampler
-        Draws the pose. Any object with ``.generator() -> Sample``
-        (built-in: :class:`SurfaceSampler`).
+    sampler : SurfaceSampler or SurfaceFollowingSampler
+        Draws the pose. Any object with ``.generator() -> Sample``.
     rotations : NAngles
         Draws one torsion angle per rotatable backbone bond, in radians.
     clash : ClashFilter
@@ -676,8 +675,9 @@ def draw_clear_torsions(
         angles = rotations.generator()
         for torsion, angle in enumerate(angles[:-1]):
             chain.rotate_in_residue(residue, torsion, angle, reverse=not append)
-        # The last bond belongs to the residue before the new one when growing
-        # at the 3' end, and to the new residue itself when growing at the 5'.
+        # The bond that carries the new nucleotide sits in whichever residue
+        # it hangs off. Appending leaves that residue second from the end.
+        # Prepending makes the new nucleotide the first residue itself.
         chain.rotate_in_residue(
             -2 if append else 0, len(angles) - 1, angles[-1], reverse=not append
         )
@@ -907,8 +907,8 @@ def make_sampler(
 
     Parameters
     ----------
-    complex_obj
-        Built ligand-only ``Complex`` (positions + topology).
+    complex_obj : maws.complex.Complex
+        Built ligand-only complex, holding positions and a topology.
     mode : {"surface-following", "sphere"}, default "surface-following"
         Which sampler to construct.
     reach : float, default 10.0
@@ -940,6 +940,14 @@ def make_sampler(
     SurfaceSampler or SurfaceFollowingSampler
         Concrete type depends on ``mode``. Both expose
         ``.generator() -> Sample``.
+
+    Raises
+    ------
+    ValueError
+        If `probe` or `reach` is negative, if `site_radius` is given without
+        `site_centre`, if `site_centre` is not a point of three coordinates,
+        if `site_radius` is not positive, or if `mode` names neither
+        sampler.
 
     Examples
     --------
