@@ -288,11 +288,18 @@ class Structure:
         ------
         ValueError
             If residue is unknown or its length is not set.
+        IndexError
+            If the index is outside the residue's atom range.
         """
         if residue not in self.residue_length or self.residue_length[residue] <= 0:
             raise ValueError(f"Unknown residue or length not set: {residue!r}")
         L = self.residue_length[residue]
-        return i + L if i < 0 else i
+        resolved = i + L if i < 0 else i
+        if not 0 <= resolved < L:
+            raise IndexError(
+                f"Atom index {i} is outside residue {residue!r} with {L} atoms"
+            )
+        return resolved
 
     def append_bond(
         self, residue: ResidueName, prev_residue_length: int | None = None
@@ -427,12 +434,11 @@ class Structure:
 
         if residue not in self.residue_length or self.residue_length[residue] <= 0:
             raise ValueError(f"Length not set for residue {residue!r}")
-        length = self.residue_length[residue]
 
         return [
             (
-                int(first) + length if first < 0 else int(first),
-                int(second) + length if second < 0 else int(second),
+                self.resolve_index(residue, int(first)),
+                self.resolve_index(residue, int(second)),
             )
             for first, second in bonds
         ]

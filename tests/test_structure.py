@@ -115,6 +115,13 @@ class TestResolveIndex:
         with pytest.raises(ValueError):
             simple_structure.resolve_index("UNKNOWN", 0)
 
+    @pytest.mark.parametrize("index", [10, -11])
+    def test_resolve_index_rejects_indices_outside_residue(
+        self, simple_structure, index
+    ):
+        with pytest.raises(IndexError, match="outside residue"):
+            simple_structure.resolve_index("RES", index)
+
 
 class TestTorsions:
     """Tests for Structure.torsions() method."""
@@ -136,6 +143,15 @@ class TestTorsions:
             rotating_elements=[("RES", -5, -2)],  # 20-5=15, 20-2=18
         )
         assert struct.torsions("RES") == [(15, 18)]
+
+    def test_torsions_rejects_out_of_range_atom_indices(self):
+        struct = Structure(
+            ["RES"],
+            residue_length=[4],
+            rotating_elements=[("RES", 1, 4)],
+        )
+        with pytest.raises(IndexError, match="outside residue"):
+            struct.torsions("RES")
 
 
 class TestConnectivity:
